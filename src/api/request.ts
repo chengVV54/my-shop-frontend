@@ -34,7 +34,7 @@ instance.interceptors.response.use(
  *
  * 因为上面的响应拦截器已经把 AxiosResponse 换成了 res.data，
  * 运行时返回值和 axios 自带的类型声明不一致，所以用这个接口描述真实行为：
- * `request.get<Product[]>('/products')` 的返回值就是 `Promise<Product[]>`，
+ * `request.get<ApiResult<Item[]>>('/items')` 的返回值就是 `Promise<ApiResult<Item[]>>`，
  * 调用方不需要再写 `res.data`，也不需要做类型断言。
  */
 export interface Request {
