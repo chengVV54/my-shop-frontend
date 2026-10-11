@@ -1,4 +1,5 @@
-import type { FC, ReactElement } from 'react'
+import type { CSSProperties, FC, ReactElement } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Card, Space, Tag, Typography, theme } from 'antd'
 import {
@@ -38,6 +39,14 @@ const CATEGORY_ICON: Record<ItemCategory, ReactElement> = {
 /** 占位图高度 */
 const COVER_HEIGHT = 160
 
+/**
+ * 标签统一样式。
+ *
+ * 颜色一律由 `utils/item.ts` 的 getModeColor / getStatusColor 决定，
+ * 卡片与详情页共用同一套映射，避免同一模式在不同页面颜色不一致。
+ */
+const TAG_STYLE: CSSProperties = { marginInlineEnd: 0 }
+
 interface ItemCardProps {
   item: Item
 }
@@ -47,11 +56,13 @@ interface ItemCardProps {
  *
  * 顶部为图片（没有图片时用灰色占位块 + 分类图标），
  * 中部为标题、模式标签、价格 / 想换什么，底部为分类 + 成色。
- * 点击整张卡片跳转到 `/items/{id}`。
+ * hover 时轻微上浮 + 阴影加深；点击整张卡片跳转到 `/items/{id}`。
  */
 const ItemCard: FC<ItemCardProps> = ({ item }) => {
   const navigate = useNavigate()
   const { token } = theme.useToken()
+
+  const [hovered, setHovered] = useState<boolean>(false)
 
   const cover = item.images?.[0]
   const modeLabel = getModeLabel(item.mode)
@@ -73,7 +84,18 @@ const ItemCard: FC<ItemCardProps> = ({ item }) => {
     <Card
       hoverable
       onClick={() => navigate(`/items/${item.id}`)}
-      style={{ height: '100%', cursor: 'pointer', overflow: 'hidden' }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        height: '100%',
+        cursor: 'pointer',
+        overflow: 'hidden',
+        borderRadius: token.borderRadiusLG,
+        borderColor: hovered ? token.colorPrimaryBorder : token.colorBorderSecondary,
+        boxShadow: hovered ? token.boxShadowSecondary : token.boxShadowTertiary,
+        transform: hovered ? 'translateY(-2px)' : 'none',
+        transition: 'box-shadow 0.2s ease, border-color 0.2s ease, transform 0.2s ease',
+      }}
       styles={{ body: { padding: 16 } }}
       cover={
         <div
@@ -92,6 +114,7 @@ const ItemCard: FC<ItemCardProps> = ({ item }) => {
             <img
               src={cover}
               alt={item.title}
+              loading="lazy"
               style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
             />
           ) : (
@@ -109,10 +132,12 @@ const ItemCard: FC<ItemCardProps> = ({ item }) => {
         </Paragraph>
 
         <Space size={4} wrap>
-          <Tag color={getModeColor(item.mode)} style={{ marginInlineEnd: 0 }}>
+          <Tag color={getModeColor(item.mode)} bordered={false} style={TAG_STYLE}>
             {modeLabel}
           </Tag>
-          <Tag style={{ marginInlineEnd: 0 }}>{categoryLabel}</Tag>
+          <Tag bordered={false} style={TAG_STYLE}>
+            {categoryLabel}
+          </Tag>
         </Space>
 
         {showWant && (

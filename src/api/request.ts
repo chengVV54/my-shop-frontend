@@ -7,6 +7,8 @@ import type {
   InternalAxiosRequestConfig,
 } from 'axios'
 
+import { useUserStore } from '@/store/useUserStore'
+
 /**
  * axios 实例。
  *
@@ -19,14 +21,30 @@ const instance: AxiosInstance = axios.create({
 })
 
 instance.interceptors.request.use(
-  (config: InternalAxiosRequestConfig): InternalAxiosRequestConfig => config,
+  // 统一注入鉴权头：token 存在时自动带 Authorization: Bearer <token>。
+  // 业务代码不得手写该请求头（见 docs/SECURITY.md 1.2）。
+  (config: InternalAxiosRequestConfig): InternalAxiosRequestConfig => {
+    const { token } = useUserStore.getState()
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`
+    }
+    return config
+  },
   (error: AxiosError): Promise<never> => Promise.reject(error),
 )
 
 instance.interceptors.response.use(
   // 响应拦截器直接返回 res.data，调用方拿到的就是业务数据
   (response: AxiosResponse) => response.data,
-  (error: AxiosError): Promise<never> => Promise.reject(error),
+  (error: AxiosError): Promise<never> => {
+    // 401：未登录或 token 已失效（过期 / 被后端撤销）。
+    // 清除本地登录态，回到未登录；这里**不自动跳转**，
+    // 交由页面决定（登录页需要留在原地展示错误，其他页面可自行引导去登录）。
+    if (error.response?.status === 401) {
+      useUserStore.getState().logout()
+    }
+    return Promise.reject(error)
+  },
 )
 
 /**

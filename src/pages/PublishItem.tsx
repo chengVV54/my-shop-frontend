@@ -1,5 +1,5 @@
 import type { FC } from 'react'
-import { Button, Card, Form, Input, InputNumber, Radio, Select, Space, Switch, Typography } from 'antd'
+import { Button, Card, Form, Input, InputNumber, Radio, Select, Space, Switch, Typography, message } from 'antd'
 import { SendOutlined } from '@ant-design/icons'
 
 import type { ItemCategory, ItemCondition, ItemMode } from '@/types/item'
@@ -44,22 +44,40 @@ const DEFAULT_MODE: ItemMode = 'BARTER'
 /**
  * 发布物品页。
  *
- * 提交逻辑尚未对接后端，仅在控制台打印表单值。
+ * 提交逻辑尚未对接后端：表单校验通过后给出提示，并把清洗后的数据打印到控制台。
  */
 const PublishItem: FC = () => {
   const [form] = Form.useForm<PublishFormValues>()
+  const [messageApi, contextHolder] = message.useMessage()
 
   // 监听模式，用于条件显示价格 / 换物诉求字段
   const mode = Form.useWatch('mode', form) ?? DEFAULT_MODE
   const needPrice = mode === 'SALE' || mode === 'BOTH'
   const needWant = mode === 'BARTER' || mode === 'BOTH'
 
+  /**
+   * 提交占位。
+   *
+   * 提交前先做一次基础清洗（去掉首尾空格），避免把脏数据传给后端；
+   * 真正的写库逻辑待接入 `POST /api/items`（见 docs/API.md 待开发接口）。
+   * 注意：前端校验只是体验优化，后端仍需独立校验全部入参（docs/SECURITY.md 1.4）。
+   */
   const handleFinish = (values: PublishFormValues): void => {
-    console.log('TODO: 提交发布', values)
+    const payload: PublishFormValues = {
+      ...values,
+      title: values.title.trim(),
+      description: values.description?.trim(),
+      wantDescription: values.wantDescription?.trim(),
+    }
+    // TODO: 接入 POST /api/items（真实写库）
+    console.log('TODO: 提交发布', payload)
+    messageApi.info('发布功能开发中，暂未真正提交')
   }
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      {contextHolder}
+
       <div>
         <Title level={3} style={{ marginBottom: 4 }}>
           发布闲置
@@ -80,6 +98,7 @@ const PublishItem: FC = () => {
             label="标题"
             rules={[
               { required: true, message: '请填写标题' },
+              { whitespace: true, message: '标题不能只有空格' },
               { max: 60, message: '标题最多 60 个字' },
             ]}
           >
@@ -94,7 +113,7 @@ const PublishItem: FC = () => {
             <Select placeholder="请选择成色" options={CONDITION_OPTIONS} />
           </Form.Item>
 
-          <Form.Item name="description" label="描述">
+          <Form.Item name="description" label="描述" rules={[{ max: 500, message: '描述最多 500 个字' }]}>
             <TextArea
               rows={4}
               maxLength={500}
@@ -111,7 +130,11 @@ const PublishItem: FC = () => {
             <Form.Item
               name="price"
               label="价格"
-              rules={[{ required: true, message: '请填写价格' }]}
+              rules={[
+                { required: true, message: '请填写价格' },
+                { type: 'number', min: 0.01, message: '价格必须大于 0' },
+                { type: 'number', max: 9999999, message: '价格超出合理范围' },
+              ]}
             >
               <InputNumber
                 min={0}
@@ -134,7 +157,11 @@ const PublishItem: FC = () => {
                 />
               </Form.Item>
 
-              <Form.Item name="wantDescription" label="想换什么补充说明">
+              <Form.Item
+                name="wantDescription"
+                label="想换什么补充说明"
+                rules={[{ max: 200, message: '补充说明最多 200 个字' }]}
+              >
                 <TextArea rows={3} maxLength={200} showCount placeholder="例如：优先换定焦镜头（选填）" />
               </Form.Item>
 

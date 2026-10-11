@@ -1,7 +1,23 @@
 import type { FC, ReactElement } from 'react'
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Button, Card, Col, Descriptions, Result, Row, Space, Spin, Tag, Typography, theme } from 'antd'
+import {
+  Avatar,
+  Button,
+  Card,
+  Col,
+  Descriptions,
+  Grid,
+  Result,
+  Row,
+  Space,
+  Spin,
+  Tag,
+  Typography,
+  message,
+  theme,
+} from 'antd'
+
 import {
   ArrowLeftOutlined,
   BookOutlined,
@@ -12,8 +28,10 @@ import {
   MobileOutlined,
   PictureOutlined,
   SkinOutlined,
+  StarOutlined,
   SwapOutlined,
   TagsOutlined,
+  UserOutlined,
 } from '@ant-design/icons'
 
 import request from '@/api/request'
@@ -30,8 +48,9 @@ import {
 
 const { Title, Text, Paragraph } = Typography
 
-/** 大图占位高度 */
+/** 大图占位高度（桌面）；手机端用 MOBILE_COVER_HEIGHT，避免占满整屏 */
 const COVER_HEIGHT = 360
+const MOBILE_COVER_HEIGHT = 240
 
 /** 分类 → 占位图图标 */
 const CATEGORY_ICON: Record<ItemCategory, ReactElement> = {
@@ -80,16 +99,22 @@ const buildActions = (mode: Item['mode']): ActionButton[] => {
 /**
  * 物品详情页。
  *
- * 左侧大图，右侧物品信息，底部按交易模式展示操作按钮。
+ * 桌面：左图右信息（Row + Col 左右排列）；
+ * 手机（md 以下）：图文上下排列，图片高度与内边距同步收窄。
  */
 const ItemDetail: FC = () => {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { token } = theme.useToken()
+  const screens = Grid.useBreakpoint()
+
+  /** md 以下视为手机 */
+  const isMobile = !screens.md
 
   const [item, setItem] = useState<Item | null>(null)
   const [loading, setLoading] = useState<boolean>(true)
   const [errorText, setErrorText] = useState<string>('')
+  const [messageApi, contextHolder] = message.useMessage()
 
   const fetchItem = useCallback(async (itemId: string): Promise<void> => {
     setLoading(true)
@@ -159,21 +184,23 @@ const ItemDetail: FC = () => {
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      {contextHolder}
+
       <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/items')}>
         返回列表
       </Button>
 
-      <Card styles={{ body: { padding: 24 } }}>
-        <Row gutter={[24, 24]}>
+      <Card styles={{ body: { padding: isMobile ? 16 : 24 } }}>
+        <Row gutter={[isMobile ? 16 : 24, 24]}>
           <Col xs={24} md={10}>
             <div
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                height: COVER_HEIGHT,
+                height: isMobile ? MOBILE_COVER_HEIGHT : COVER_HEIGHT,
                 overflow: 'hidden',
-                fontSize: 72,
+                fontSize: isMobile ? 56 : 72,
                 color: token.colorTextQuaternary,
                 background: token.colorFillSecondary,
                 borderRadius: token.borderRadiusLG,
@@ -194,16 +221,20 @@ const ItemDetail: FC = () => {
           <Col xs={24} md={14}>
             <Space direction="vertical" size={12} style={{ width: '100%' }}>
               <Space size={8} wrap>
-                <Tag color={getModeColor(item.mode)}>{getModeLabel(item.mode)}</Tag>
-                <Tag color={getStatusColor(item.status)}>{getStatusLabel(item.status)}</Tag>
+                <Tag color={getModeColor(item.mode)} bordered={false}>
+                  {getModeLabel(item.mode)}
+                </Tag>
+                <Tag color={getStatusColor(item.status)} bordered={false}>
+                  {getStatusLabel(item.status)}
+                </Tag>
               </Space>
 
-              <Title level={3} style={{ margin: 0 }}>
+              <Title level={isMobile ? 4 : 3} style={{ margin: 0 }}>
                 {item.title}
               </Title>
 
               {priceText !== '' && (item.mode === 'SALE' || item.mode === 'BOTH') && (
-                <Text strong style={{ fontSize: 24, color: token.colorError }}>
+                <Text strong style={{ fontSize: isMobile ? 20 : 24, color: token.colorError }}>
                   {priceText}
                 </Text>
               )}
@@ -215,23 +246,35 @@ const ItemDetail: FC = () => {
                 </Text>
               )}
 
+              {/* 卖家信息：用户体系尚未接入（见 docs/PROGRESS.md 待做），头像与信用分先占位 */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 12,
+                  padding: 12,
+                  background: token.colorFillQuaternary,
+                  borderRadius: token.borderRadius,
+                }}
+              >
+                <Avatar size={40} style={{ backgroundColor: token.colorPrimary }}>
+                  <UserOutlined />
+                </Avatar>
+                <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.6 }}>
+                  <Text strong>用户 {item.ownerId}</Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    信用分 --（待接入） · 发布于 {item.createdAt}
+                  </Text>
+                </div>
+              </div>
+
               <Descriptions
-                column={1}
+                column={{ xs: 1, sm: 2 }}
                 size="small"
                 colon={false}
                 items={[
                   { key: 'category', label: '分类', children: getCategoryLabel(item.category) },
                   { key: 'condition', label: '成色', children: getConditionLabel(item.condition) },
-                  {
-                    key: 'owner',
-                    label: '发布者',
-                    children: `用户 ${item.ownerId}`,
-                  },
-                  {
-                    key: 'createdAt',
-                    label: '发布时间',
-                    children: item.createdAt,
-                  },
                 ]}
               />
 
@@ -248,11 +291,22 @@ const ItemDetail: FC = () => {
                     key={action.key}
                     type={action.type}
                     icon={action.icon}
-                    onClick={() => console.log(`TODO: ${action.label}`)}
+                    block={isMobile}
+                    onClick={() => {
+                      // 换物 / 下单流程尚未开发（见 docs/PROGRESS.md 待做），先给出明确反馈
+                      messageApi.info(`${action.label}：功能开发中，敬请期待`)
+                    }}
                   >
                     {action.label}
                   </Button>
                 ))}
+                <Button
+                  icon={<StarOutlined />}
+                  block={isMobile}
+                  onClick={() => messageApi.info('收藏功能开发中')}
+                >
+                  收藏
+                </Button>
                 {actions.length === 0 && (
                   <Text type="secondary">
                     <CheckCircleOutlined /> 该物品暂不支持线上操作

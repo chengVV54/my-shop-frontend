@@ -55,30 +55,42 @@ npm config set registry https://registry.npmmirror.com
 my-shop-frontend/
 ├── src/
 │   ├── api/              # 接口层
-│   │   └── request.ts    # axios 实例（baseURL: /api，响应拦截器直接返回 data）
+│   │   ├── request.ts    # axios 实例（baseURL: /api，请求拦截器注入 token，响应拦截器返回 data 并处理 401）
+│   │   └── auth.ts       # 用户鉴权接口（注册 / 登录 / 获取当前用户）
 │   ├── components/       # 通用组件
 │   │   ├── Layout/
-│   │   │   └── index.tsx # 全局布局（导航栏 + 内容区 + 页脚）
+│   │   │   └── index.tsx # 全局布局（导航栏 + 内容区 + 页脚，含登录态用户区）
 │   │   ├── ItemCard/     # 物品卡片
 │   │   │   └── index.tsx
-│   │   └── .gitkeep
+│   │   └── ModeItemList/ # 按交易模式过滤的物品网格（换物页 / 二手页共用）
 │   ├── pages/            # 页面
 │   │   ├── Home.tsx          # 首页
-│   │   ├── ItemList.tsx      # 物品列表（换物 / 二手筛选 + 卡片网格）
+│   │   ├── ItemList.tsx      # 物品列表（分类 / 成色筛选 + 排序 + 分页）
 │   │   ├── ItemDetail.tsx    # 物品详情
-│   │   └── PublishItem.tsx   # 发布物品
+│   │   ├── Barter.tsx        # 换物页
+│   │   ├── SecondHand.tsx    # 二手页
+│   │   ├── PublishItem.tsx   # 发布物品
+│   │   ├── Messages.tsx      # 消息（占位）
+│   │   ├── Videos.tsx        # 视频（占位）
+│   │   ├── Profile.tsx       # 我的（展示当前登录用户）
+│   │   ├── Login.tsx         # 登录
+│   │   └── Register.tsx      # 注册
 │   ├── router/           # 路由
 │   │   └── index.tsx     # 嵌套路由：<Layout> 作为父级布局，子页面通过 <Outlet /> 渲染
 │   ├── store/            # 全局状态
-│   │   └── useCartStore.ts # 购物车（zustand）
+│   │   ├── useCartStore.ts  # 购物车（zustand）
+│   │   └── useUserStore.ts  # 登录态（token + 用户信息，持久化到 localStorage）
 │   ├── types/            # 类型定义
 │   │   ├── item.ts       # Item / ItemMode / ItemCondition / ItemCategory / ItemStatus / BarterRequest / Order
+│   │   ├── user.ts       # User（UserVO）/ LoginResponse
 │   │   └── index.ts      # 统一出口 + ApiResult<T> 响应包装体
 │   ├── utils/            # 工具函数
 │   │   ├── item.ts       # 模式 / 分类 / 成色文案与颜色、formatPrice
-│   │   └── cart.ts       # isPurchasable（是否支持二手下单）
-│   ├── App.tsx           # 根组件，渲染路由
+│   │   ├── cart.ts       # isPurchasable（是否支持二手下单）
+│   │   └── error.ts      # getErrorMessage（从请求异常提取提示文案）
+│   ├── App.tsx           # 根组件，渲染路由 + 启动时恢复登录态
 │   └── main.tsx          # 入口，挂载 ReactDOM + BrowserRouter
+├── docs/                 # 架构 / 接口 / 规范 / 安全 / 进度文档
 ├── index.html
 ├── package.json
 ├── tsconfig.json
@@ -97,7 +109,50 @@ my-shop-frontend/
 | / | Home | 首页 |
 | /items | ItemList | 物品列表 |
 | /items/:id | ItemDetail | 物品详情 |
+| /barter | Barter | 换物入口 |
+| /second-hand | SecondHand | 二手入口 |
 | /publish | PublishItem | 发布物品 |
+| /messages | Messages | 消息（占位） |
+| /videos | Videos | 视频（占位） |
+| /profile | Profile | 我的 |
+| /login | Login | 登录 |
+| /register | Register | 注册 |
+| /barters | — | 重定向到 `/profile`（「我的换物」独立页尚未开发） |
+
+## 用户系统
+
+登录相关代码集中在 `src/api/auth.ts`、`src/store/useUserStore.ts`、`src/pages/Login.tsx`、
+`src/pages/Register.tsx` 与 `src/components/Layout/index.tsx`：
+
+- **注册** `/register`：用户名 3~20 位、密码至少 6 位、两次密码需一致；成功后跳转 `/login`。
+- **登录** `/login`：成功后保存 token 与用户信息，跳转首页，导航栏显示头像 + 用户名。
+- **登录态恢复**：`App.tsx` 启动时调用 `useUserStore.init()`，从 `localStorage` 还原登录态。
+- **自动携带 token**：`src/api/request.ts` 的请求拦截器统一注入 `Authorization: Bearer <token>`，
+  业务代码不手写该请求头。
+- **401 处理**：响应拦截器捕获 HTTP 401（未登录 / token 过期）后清除本地登录态，
+  但不自动跳转，由页面决定后续引导（登录页会就地提示错误）。
+- **安全约束**：前端**不保存密码**，`localStorage` 只存 `token` 和用户展示信息；
+  登录/注册成功后立即清空表单状态；前端的登录态只用于显示/隐藏入口，
+  权限最终判断始终在后端（见 [docs/SECURITY.md](docs/SECURITY.md)）。
+
+### 测试账号
+
+| 用户名 | 密码 |
+| --- | --- |
+| `zhangsan` | `123456` |
+| `lisi` | `123456` |
+
+> 这两个账号由后端预置，仅供本地开发联调使用（需先启动后端 `http://localhost:8080`）。
+
+### 本地联调
+
+```bash
+# 1. 启动后端（my-shop-backend，端口 8080）
+# 2. 启动前端
+npm run dev   # http://localhost:5173
+# 3. 打开 http://localhost:5173/login 用上面的测试账号登录
+```
+
 
 ## 核心数据模型
 
@@ -155,6 +210,9 @@ setItems(res.data)
 | --- | --- | --- | --- |
 | GET | `/api/items` | 物品列表，支持 `?mode=BARTER/SALE/BOTH` | 已对接（ItemList / Home） |
 | GET | `/api/items/{id}` | 物品详情 | 已对接（ItemDetail） |
+| POST | `/api/auth/register` | 用户注册，Body `{ username, password }` | 已对接（Register） |
+| POST | `/api/auth/login` | 用户登录，返回 `{ token, user }` | 已对接（Login） |
+| GET | `/api/auth/me` | 获取当前登录用户，需 `Authorization: Bearer <token>` | 已封装（`api/auth.ts` 的 `getCurrentUser`，暂无页面调用） |
 | GET | `/api/barters` | 换物申请列表 | 待对接 |
 | GET | `/api/orders` | 二手订单列表 | 待对接 |
 
@@ -168,9 +226,17 @@ setItems(res.data)
 - [x] 物品列表（对接后端）
 - [x] 物品详情
 - [x] 发布物品（表单占位）
-- [ ] 用户登录
+- [x] 用户系统（注册 / 登录 / 登录态 + 测试账号）
 - [ ] 换物申请
 - [ ] 二手下单
 - [ ] 消息
-- [ ] 个人中心
+- [ ] 个人中心（我的物品 / 换物 / 订单接入真实数据）
+
+## 相关文档
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 架构说明
+- [docs/API.md](docs/API.md) — 接口约定
+- [docs/CONVENTIONS.md](docs/CONVENTIONS.md) — 编码规范
+- [docs/SECURITY.md](docs/SECURITY.md) — 安全底线
+- [docs/PROGRESS.md](docs/PROGRESS.md) — 进度与待办
 
