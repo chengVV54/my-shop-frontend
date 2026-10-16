@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 
 import Layout from '@/components/Layout'
 import Barter from '@/pages/Barter'
+import BarterApply from '@/pages/BarterApply'
 import Home from '@/pages/Home'
 import ItemDetail from '@/pages/ItemDetail'
 import ItemList from '@/pages/ItemList'
@@ -22,6 +23,8 @@ const AppRouter: FC = () => {
         <Route path="/items" element={<ItemList />} />
         <Route path="/items/:id" element={<ItemDetail />} />
         <Route path="/barter" element={<Barter />} />
+        {/* 发起换物：用「我的在架物品」换 /items/:itemId 这件物品（需登录） */}
+        <Route path="/barter/apply/:itemId" element={<BarterApply />} />
         <Route path="/second-hand" element={<SecondHand />} />
         <Route path="/publish" element={<PublishItem />} />
         <Route path="/messages" element={<Messages />} />

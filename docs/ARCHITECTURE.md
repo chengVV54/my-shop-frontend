@@ -46,7 +46,8 @@ my-shop-frontend/
     ├── App.tsx             # 根组件：ConfigProvider（主题/中文 locale）+ 路由 + 启动时恢复登录态
     ├── api/                # HTTP 层，统一封装 axios
     │   ├── request.ts      # axios 实例 + 拦截器（注入 token / 返回 data / 401 清登录态）+ Request 类型
-    │   └── auth.ts         # 鉴权接口：register / login / getCurrentUser
+    │   ├── auth.ts         # 鉴权接口：register / login / getCurrentUser
+    │   └── barter.ts       # 换物接口：createBarter / getBarters
     ├── components/         # 可复用展示型组件，一个组件一个目录
     │   ├── Layout/         # 全局布局：顶部导航(响应式，含登录态用户区) + 内容区(Outlet) + 页脚
     │   ├── ItemCard/       # 物品卡片（hover 阴影/圆角/标签）
@@ -54,8 +55,9 @@ my-shop-frontend/
     ├── pages/              # 路由级页面组件
     │   ├── Home.tsx        # 首页：Hero + 热门分类 + 最新发布
     │   ├── ItemList.tsx    # 物品列表：模式/分类/成色筛选 + 排序 + 分页
-    │   ├── ItemDetail.tsx  # 物品详情（含卖家信息区）
+    │   ├── ItemDetail.tsx  # 物品详情（含卖家信息区 + 发起换物入口）
     │   ├── Barter.tsx      # 换物页（BARTER / BOTH）
+    │   ├── BarterApply.tsx # 发起换物（选我的在架物品 + 留言，提交 POST /api/barters）
     │   ├── SecondHand.tsx  # 二手页（SALE / BOTH）
     │   ├── PublishItem.tsx # 发布物品（表单占位，未写库）
     │   ├── Messages.tsx    # 消息页（占位：会话列表 + 聊天区）
@@ -70,7 +72,8 @@ my-shop-frontend/
     │   └── useUserStore.ts # 登录态：user / token + init / login / logout（持久化 localStorage）
     ├── types/              # 类型定义
     │   ├── index.ts        # 统一出口 + ApiResult<T>
-    │   ├── item.ts         # Item / BarterRequest / Order 及枚举
+    │   ├── item.ts         # Item / Order 及枚举
+    │   ├── barter.ts       # BarterStatus / BarterRequest / BarterApplyPayload
     │   └── user.ts         # User（后端 UserVO）/ LoginResponse
     └── utils/              # 纯函数工具
         ├── item.ts         # 枚举中文名、Tag 颜色、价格格式化
@@ -86,8 +89,9 @@ my-shop-frontend/
 | --- | --- | --- |
 | `/` | `Home` | 首页：Hero + 热门分类 8 个入口 + 最新 8 件物品 |
 | `/items` | `ItemList` | 物品列表：模式 / 分类 / 成色筛选 + 排序 + 分页（每页 12 条，前端计算） |
-| `/items/:id` | `ItemDetail` | 物品详情（卖家信息区 + 收藏占位） |
+| `/items/:id` | `ItemDetail` | 物品详情（卖家信息区 + 收藏占位；BARTER / BOTH 显示「发起换物」入口） |
 | `/barter` | `Barter` | 换物入口：只展示 `BARTER` / `BOTH` |
+| `/barter/apply/:itemId` | `BarterApply` | 发起换物：用「我的在架物品」换 `:itemId` 这件物品（需登录，未登录跳 `/login`） |
 | `/second-hand` | `SecondHand` | 二手入口：只展示 `SALE` / `BOTH` |
 | `/publish` | `PublishItem` | 发布表单（当前仅 `console.log`，未提交后端） |
 | `/messages` | `Messages` | 消息（占位）：左侧 mock 会话列表 + 右侧聊天区 |
@@ -106,6 +110,16 @@ my-shop-frontend/
 - 「换物」「二手」两个入口都需要包含 `BOTH`，而后端 `GET /api/items` 的 `mode` 参数只支持单值，
   因此 `ModeItemList` 请求一次全量后在**前端**过滤（`modes.includes(item.mode)`）；
   同理列表页的筛选 / 排序 / 分页也都在前端完成，数据量大时应改为服务端分页与筛选。
+- `/barter/apply/:itemId` 是**唯一带登录前置判断的页面**：`ItemDetail` 的「发起换物」按钮
+  在未登录时提示并跳 `/login`；该页面自身在 `useEffect` 里再判断一次，未登录直接 `replace` 到 `/login`。
+  注意顺序问题：`App.tsx` 的 `useUserStore.init()`（恢复 localStorage 登录态）写在**父组件**的
+  `useEffect` 里，而子组件 effect 先执行，所以直接刷新 `/barter/apply/1` 时 store 里的 `user`
+  仍是 `null`。该页面因此先调用一次幂等的 `useUserStore.getState().init()` 再读登录态，
+  否则会把已登录用户误弹到登录页。这是当前「没有全局路由守卫」的临时处理，
+  后续做统一守卫时（见 docs/SECURITY.md 待做）应一并收敛。
+- 「我的物品」列表用 `GET /api/items` 全量拉取后前端过滤
+  （`ownerId === 当前用户 && status === 'AVAILABLE'`，并剔除目标物品本身），
+  因为后端 `GET /api/items` 不支持 `ownerId` 参数。
 
 ## 5. 数据流
 

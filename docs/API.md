@@ -54,7 +54,8 @@ const items = res.data
 | POST | `/api/auth/register` | 用户注册 | `Register.tsx`（经 `api/auth.ts`） |
 | POST | `/api/auth/login` | 用户登录，返回 token | `Login.tsx`（经 `api/auth.ts`） |
 | GET | `/api/auth/me` | 获取当前登录用户 | 已封装（`api/auth.ts` 的 `getCurrentUser`），暂无页面调用 |
-| GET | `/api/barters` | 换物申请列表 | 暂无 |
+| GET | `/api/barters` | 换物申请列表 | 已封装（`api/barter.ts` 的 `getBarters`），暂无页面调用 |
+| POST | `/api/barters` | 发起换物申请（需登录） | `BarterApply.tsx`（经 `api/barter.ts`） |
 | GET | `/api/orders` | 二手订单列表 | 暂无 |
 
 ### GET /api/health
@@ -70,6 +71,10 @@ const items = res.data
 | 参数 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `mode` | `BARTER` \| `SALE` \| `BOTH` | 否 | 不传表示全部 |
+
+> 该接口**不支持 `ownerId` 参数**：需要「某人的物品」时前端全量拉取后自行过滤
+> （见「发起换物」页的 `myItems`：`ownerId === 当前用户 && status === 'AVAILABLE'`）。
+> 数据量大时应改为服务端筛选。
 
 响应 `data`：`Item[]`
 
@@ -140,9 +145,52 @@ token 失效时后端返回 **HTTP 401**，由 `request.ts` 的响应拦截器�
 
 ### GET /api/barters
 
+请求头：`Authorization: Bearer <token>`
+
 请求参数：无
 
 响应 `data`：`BarterRequest[]`
+
+前端实现：`src/api/barter.ts` 的 `getBarters()`（已封装，暂无页面调用；
+「我的换物」独立页 `/barters` 仍未开发，见 docs/PROGRESS.md）。
+
+### POST /api/barters（发起换物）
+
+请求头：`Authorization: Bearer <token>`（**必须有**，未登录返回 HTTP 401）
+
+请求体：
+
+```json
+{
+  "toItemId": 2,
+  "fromItemId": 1,
+  "message": "换吗？"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `toItemId` | number | 是 | 我想换的物品（目标物品） |
+| `fromItemId` | number | 是 | 我提供的物品，必须是本人的在架物品 |
+| `message` | string | 否 | 留言，≤500 字 |
+
+响应 `data`：`BarterRequest`（后端 `BarterRequestVO`）。
+
+错误码（前端只负责按后端 `message` 提示，最终判断在后端）：
+
+| 状态 | 含义 |
+| --- | --- |
+| 401 | 未登录 / token 失效（`request.ts` 拦截器清除本地登录态） |
+| 404 | 物品不存在 |
+| 400 | 物品不可换 / 不能和自己换 / 已发起过换物申请 |
+| 403 | 只能用自己的物品发起换物 |
+
+前端接入（`src/api/barter.ts` + `src/pages/BarterApply.tsx`）：
+
+- 页面「目标物品」来自 `GET /api/items/{itemId}`，「我的物品」来自 `GET /api/items` 前端过滤；
+- 表单校验只做「必须选一件物品」与留言长度，提交时把留言 `trim()`，空串不发送；
+- 未登录直接跳 `/login`；提交成功后提示「已发起换物申请」并跳 `/profile`；
+- 失败用 `utils/error.ts` 的 `getErrorMessage()` 取后端 `message`，不自行编造原因。
 
 ### GET /api/orders
 
@@ -157,7 +205,6 @@ token 失效时后端返回 **HTTP 401**，由 `request.ts` 的响应拦截器�
 | 方法 | 路径 | 说明 | 对应待办 |
 | --- | --- | --- | --- |
 | POST | `/api/items` | 发布物品（真实写库） | 发布物品 |
-| POST | `/api/barters` | 发起换物申请 | 换物流程 |
 
 ### POST /api/items
 
@@ -181,21 +228,10 @@ token 失效时后端返回 **HTTP 401**，由 `request.ts` 的响应拦截器�
 
 响应 `data`：新建的 `Item`。
 
-### POST /api/barters
-
-请求头：`Authorization: Bearer <token>`
-
-请求体（草案）：
-
-```json
-{ "fromItemId": 1, "toItemId": 2, "message": "string", "priceDiff": 0 }
-```
-
-响应 `data`：新建的 `BarterRequest`。
-
 ## 4. 核心数据模型
 
-定义位置：`src/types/item.ts`、`src/types/user.ts`（由 `src/types/index.ts` 统一导出）。
+定义位置：`src/types/item.ts`（物品、订单）、`src/types/barter.ts`（换物申请）、
+`src/types/user.ts`（用户），由 `src/types/index.ts` 统一导出。
 
 ### User（后端 `UserVO`）
 
@@ -246,21 +282,32 @@ interface Item {
 | `BarterStatus` | `PENDING` / `ACCEPTED` / `REJECTED` / `DONE` / `CANCELLED` |
 | `OrderStatus` | `PENDING` / `PAID` / `SHIPPED` / `DONE` / `CANCELLED` |
 
-### BarterRequest
+### BarterRequest（`src/types/barter.ts`）
 
 ```ts
+type BarterStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'DONE' | 'CANCELLED'
+
 interface BarterRequest {
   id: number
   fromUserId: number
   toUserId: number
   fromItemId: number
   toItemId: number
-  message: string
-  priceDiff: number
+  message?: string      // 选填留言
+  priceDiff: number     // 差价，由后端计算
   status: BarterStatus
   createdAt: string
 }
+
+/** POST /api/barters 的请求体 */
+interface BarterApplyPayload {
+  toItemId: number
+  fromItemId: number
+  message?: string
+}
 ```
+
+> 方向约定：`from*` 是**我提供的**，`to*` 是**我想换的**，与请求体字段保持一致。
 
 ### Order
 

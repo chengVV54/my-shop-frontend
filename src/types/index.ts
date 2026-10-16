@@ -1,4 +1,5 @@
 export * from './item'
+export * from './barter'
 export * from './user'
 
 /**

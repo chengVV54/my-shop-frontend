@@ -2,7 +2,7 @@
 
 > 记录当前完成度与后续计划。每完成一项请更新本文档。
 
-最后更新：用户系统（前端）完成——注册 / 登录 / 登录态持久化 / 导航栏用户区 / 401 统一处理
+最后更新：前端「发起换物」完成——详情页入口 + `/barter/apply/:itemId` 页面 + `POST /api/barters`
 
 ## 已完成
 
@@ -92,6 +92,30 @@
     成功后立即清空表单；token 存 localStorage 并在拦截器统一注入；前端登录态只用于显示/隐藏入口，
     权限最终判断仍在后端
 
+- [x] **前端发起换物（`POST /api/barters`）**
+  - 类型：新增 `types/barter.ts` 定义 `BarterStatus` / `BarterRequest`（`BarterRequestVO`）/
+    `BarterApplyPayload`，经 `types/index.ts` 统一导出；原定义在 `types/item.ts` 的同名类型已迁出，避免重复导出
+  - 接口：新增 `api/barter.ts`，封装 `createBarter()`（`POST /api/barters`）与
+    `getBarters()`（`GET /api/barters`，页面待开发）；token 由 `request.ts` 拦截器自动携带
+  - 入口：`ItemDetail` 的「发起换物」按钮（`BARTER` / `BOTH` 显示）改为真实流程——
+    未登录提示「请先登录」并跳 `/login`；自己的物品提示「不能对自己发布的物品发起换物」；
+    已登录跳 `/barter/apply/{itemId}`。「立即购买 / 联系对方 / 联系卖家」仍是占位提示
+  - 页面：新增 `pages/BarterApply.tsx`（路由 `/barter/apply/:itemId`，需登录）
+    - 目标物品用 `GET /api/items/{itemId}`，与「我的物品」列表（`GET /api/items`）并行请求
+    - 「我的物品」= 全量物品中 `ownerId === 当前用户` 且 `status === 'AVAILABLE'`，
+      并剔除目标物品本身（后端不支持 `ownerId` 参数，只能前端过滤）
+    - 表单：antd `Select` 选「我提供的物品」（必填）+ `TextArea` 留言（选填，≤500，`maxLength` + `showCount`）
+    - 提交：`createBarter({ toItemId, fromItemId, message })`，留言先 `trim()`、空串不发送；
+      成功提示「已发起换物申请」并跳 `/profile`；失败用 `getErrorMessage()` 展示后端 `message`
+      （401 / 403 / 400 / 404 都不自行编造原因）
+    - 状态：加载中 `Spin`；物品不存在 / 加载失败用 `Result` 展示并提供「返回列表 / 重新加载」；
+      没有可换物品时 `Empty` + 「去发布物品」入口
+  - 路由：`router/index.tsx` 新增 `/barter/apply/:itemId`
+  - 安全（守 [SECURITY.md](./SECURITY.md) 底线）：登录态只用于引导与显示，未手写 `Authorization`
+    头，不做「前端校验代替后端权限」；表单只做必填与长度基础校验，注意
+    `App.tsx` 的 `init()` 在父组件 effect 中执行，页面内先幂等调用一次 `init()` 再判断登录态
+    （否则直接刷新本页会把已登录用户误弹去登录页）
+
 ## 进行中
 
 - [ ] 无（当前迭代已收尾，下一步从「待做」取）
@@ -105,8 +129,9 @@
 - [ ] **发布物品（真实写库）**
   - `PublishItem` 接入 `POST /api/items`，含图片上传、表单校验、提交后跳转
 - [ ] **换物流程**
-  - 发起换物申请、我的换物列表、接受/拒绝/完成
-  - 依赖 `POST /api/barters`、`GET /api/barters`
+  - [x] 发起换物申请（前端，`/barter/apply/:itemId` → `POST /api/barters`）
+  - [ ] 我的换物列表（`GET /api/barters` 已封装，`/barters` 仍重定向到 `/profile`）
+  - [ ] 接受 / 拒绝 / 完成（依赖后端的换物状态流转接口）
 - [ ] **二手下单**
   - 购物车 → 下单 → 订单列表/详情/状态流转
   - 依赖 `GET /api/orders` 及后续下单接口
@@ -134,8 +159,14 @@
   但「我的物品 / 我的换物 / 我的订单」三块卡片仍无接口、为空态；
   `/messages`、`/videos` 无接口，消息页的 3 条会话是 mock 数据。
 - 详情页「收藏」按钮只提示开发中，未落库；卖家信用分字段后端暂无，界面显示 `--`。
+- 发起换物：`BarterApply` 的「我的物品」是 `GET /api/items` 全量拉取后前端过滤
+  （后端 `GET /api/items` 不支持 `ownerId`），物品多时会浪费流量，后续应改为服务端筛选；
+  页面只在**进入时**校验登录态，申请提交过程中若 token 失效应以后端 401 为准（拦截器会清登录态）。
+- `POST /api/barters` 成功后跳 `/profile`，而 `/profile` 的「我的换物」卡片仍是空态，
+  看不到刚提交的申请（`GET /api/barters` 已封装，页面待开发）。
 - `useCartStore` 只有本地状态，未持久化、未与后端同步；购物车页面尚未开发（点击仅提示占位）。
-- 用户系统：登录态只用于显示/隐藏入口，**没有**路由守卫——未登录也能打开 `/profile` 等页面；
+- 用户系统：登录态只用于显示/隐藏入口，**没有**统一路由守卫——未登录也能打开 `/profile` 等页面
+  （`/barter/apply/:itemId` 是唯一在页面内自带登录前置判断的路由）；
   `/barters` 暂重定向到 `/profile`；登录后固定跳首页，不支持回跳登录前的地址；
   首屏用 localStorage 里的 `user` 缓存渲染，尚未调用 `GET /api/auth/me` 做权威刷新。
 - 401 已在 `request.ts` 统一处理（清除本地登录态），但**不自动跳转**，也尚未统一各页面的

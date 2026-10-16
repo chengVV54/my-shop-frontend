@@ -40,21 +40,8 @@ export interface Item {
   createdAt: string
 }
 
-/** 换物申请状态 */
-export type BarterStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'DONE' | 'CANCELLED'
-
-/** 换物申请：fromItem 换 toItem */
-export interface BarterRequest {
-  id: number
-  fromUserId: number
-  toUserId: number
-  fromItemId: number
-  toItemId: number
-  message: string
-  priceDiff: number
-  status: BarterStatus
-  createdAt: string
-}
+// 换物申请相关类型（BarterStatus / BarterRequest）已拆到 `types/barter.ts`，
+// 经 `types/index.ts` 统一导出，这里不再重复定义，避免同名导出冲突。
 
 /** 二手订单状态 */
 export type OrderStatus = 'PENDING' | 'PAID' | 'SHIPPED' | 'DONE' | 'CANCELLED'

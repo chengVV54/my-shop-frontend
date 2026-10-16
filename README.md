@@ -56,7 +56,8 @@ my-shop-frontend/
 ├── src/
 │   ├── api/              # 接口层
 │   │   ├── request.ts    # axios 实例（baseURL: /api，请求拦截器注入 token，响应拦截器返回 data 并处理 401）
-│   │   └── auth.ts       # 用户鉴权接口（注册 / 登录 / 获取当前用户）
+│   │   ├── auth.ts       # 用户鉴权接口（注册 / 登录 / 获取当前用户）
+│   │   └── barter.ts     # 换物接口（发起换物申请 / 我的换物列表）
 │   ├── components/       # 通用组件
 │   │   ├── Layout/
 │   │   │   └── index.tsx # 全局布局（导航栏 + 内容区 + 页脚，含登录态用户区）
@@ -66,8 +67,9 @@ my-shop-frontend/
 │   ├── pages/            # 页面
 │   │   ├── Home.tsx          # 首页
 │   │   ├── ItemList.tsx      # 物品列表（分类 / 成色筛选 + 排序 + 分页）
-│   │   ├── ItemDetail.tsx    # 物品详情
+│   │   ├── ItemDetail.tsx    # 物品详情（发起换物入口）
 │   │   ├── Barter.tsx        # 换物页
+│   │   ├── BarterApply.tsx   # 发起换物（选我的物品 + 留言）
 │   │   ├── SecondHand.tsx    # 二手页
 │   │   ├── PublishItem.tsx   # 发布物品
 │   │   ├── Messages.tsx      # 消息（占位）
@@ -81,7 +83,8 @@ my-shop-frontend/
 │   │   ├── useCartStore.ts  # 购物车（zustand）
 │   │   └── useUserStore.ts  # 登录态（token + 用户信息，持久化到 localStorage）
 │   ├── types/            # 类型定义
-│   │   ├── item.ts       # Item / ItemMode / ItemCondition / ItemCategory / ItemStatus / BarterRequest / Order
+│   │   ├── item.ts       # Item / ItemMode / ItemCondition / ItemCategory / ItemStatus / Order
+│   │   ├── barter.ts     # BarterStatus / BarterRequest（换物申请）
 │   │   ├── user.ts       # User（UserVO）/ LoginResponse
 │   │   └── index.ts      # 统一出口 + ApiResult<T> 响应包装体
 │   ├── utils/            # 工具函数
@@ -108,8 +111,9 @@ my-shop-frontend/
 | --- | --- | --- |
 | / | Home | 首页 |
 | /items | ItemList | 物品列表 |
-| /items/:id | ItemDetail | 物品详情 |
+| /items/:id | ItemDetail | 物品详情（BARTER / BOTH 显示「发起换物」） |
 | /barter | Barter | 换物入口 |
+| /barter/apply/:itemId | BarterApply | 发起换物（需登录：选我的在架物品 + 留言） |
 | /second-hand | SecondHand | 二手入口 |
 | /publish | PublishItem | 发布物品 |
 | /messages | Messages | 消息（占位） |
@@ -152,6 +156,26 @@ my-shop-frontend/
 npm run dev   # http://localhost:5173
 # 3. 打开 http://localhost:5173/login 用上面的测试账号登录
 ```
+
+
+## 发起换物
+
+换物前端由三处组成：详情页入口 → 发起页 → 提交接口。
+
+- **入口**：`src/pages/ItemDetail.tsx`。`mode` 为 `BARTER` / `BOTH` 时显示「发起换物」按钮；
+  未登录点击会提示「请先登录」并跳到 `/login`，已登录则跳到 `/barter/apply/{itemId}`；
+  自己的物品会提示「不能对自己发布的物品发起换物」（后端同样会校验）。
+- **发起页**：`src/pages/BarterApply.tsx`（路由 `/barter/apply/:itemId`，需登录）。
+  - 顶部展示目标物品（图 + 标题 + 模式标签 + 价格）；
+  - 表单用 antd `Select` 选择「我提供的物品」，antd `TextArea` 填写留言（选填，≤500）；
+  - 提交调用 `src/api/barter.ts` 的 `createBarter()`，成功提示「已发起换物申请」并回到 `/profile`，
+    失败按后端 `message` 提示（401 / 403 / 400 / 404）；
+  - 没有可用的在架物品时给出空态与「去发布物品」入口。
+- **数据来源**：目标物品用 `GET /api/items/{itemId}`；「我的物品」用 `GET /api/items` 全量拉取后
+  **前端过滤** `ownerId === 当前用户 && status === 'AVAILABLE'`（后端暂不支持 `ownerId` 参数），
+  并剔除目标物品本身。
+- **鉴权**：`request.ts` 拦截器自动带 `Authorization: Bearer <token>`，页面不手写请求头；
+  登录态只用于引导与显示，物品归属等最终由后端判定（见 [docs/SECURITY.md](docs/SECURITY.md)）。
 
 
 ## 核心数据模型
@@ -213,21 +237,23 @@ setItems(res.data)
 | POST | `/api/auth/register` | 用户注册，Body `{ username, password }` | 已对接（Register） |
 | POST | `/api/auth/login` | 用户登录，返回 `{ token, user }` | 已对接（Login） |
 | GET | `/api/auth/me` | 获取当前登录用户，需 `Authorization: Bearer <token>` | 已封装（`api/auth.ts` 的 `getCurrentUser`，暂无页面调用） |
-| GET | `/api/barters` | 换物申请列表 | 待对接 |
+| POST | `/api/barters` | 发起换物申请，Body `{ toItemId, fromItemId, message? }`，需登录 | 已对接（BarterApply） |
+| GET | `/api/barters` | 换物申请列表，需登录 | 已封装（`api/barter.ts` 的 `getBarters`，页面待开发） |
 | GET | `/api/orders` | 二手订单列表 | 待对接 |
 
-> 「物品详情」页底部的操作按钮（发起换物 / 立即购买 / 联系对方）目前只在控制台打印 `TODO`，
-> 「发布物品」页的提交同理，尚未写入后端。
+> 「物品详情」页的「立即购买 / 联系对方 / 联系卖家」按钮目前只提示「功能开发中」，
+> 「发布物品」页的提交同理，尚未写入后端；「发起换物」已接入 `POST /api/barters`。
 
 ## 开发进度
 
 - [x] 项目骨架
 - [x] 全局 Layout（导航栏 + 页脚）
 - [x] 物品列表（对接后端）
-- [x] 物品详情
+- [x] 物品详情（含发起换物入口）
 - [x] 发布物品（表单占位）
 - [x] 用户系统（注册 / 登录 / 登录态 + 测试账号）
-- [ ] 换物申请
+- [x] 发起换物（详情页入口 + `/barter/apply/:itemId` + `POST /api/barters`）
+- [ ] 我的换物列表 / 接受与拒绝换物
 - [ ] 二手下单
 - [ ] 消息
 - [ ] 个人中心（我的物品 / 换物 / 订单接入真实数据）

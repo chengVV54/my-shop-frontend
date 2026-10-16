@@ -35,6 +35,7 @@ import {
 } from '@ant-design/icons'
 
 import request from '@/api/request'
+import { useUserStore } from '@/store/useUserStore'
 import type { ApiResult, Item, ItemCategory } from '@/types'
 import {
   formatPrice,
@@ -107,6 +108,9 @@ const ItemDetail: FC = () => {
   const navigate = useNavigate()
   const { token } = theme.useToken()
   const screens = Grid.useBreakpoint()
+
+  /** 当前登录用户；null 表示未登录（只用于显示与引导，权限最终判断在后端） */
+  const user = useUserStore((state) => state.user)
 
   /** md 以下视为手机 */
   const isMobile = !screens.md
@@ -181,6 +185,34 @@ const ItemDetail: FC = () => {
     ? item.wantDescription.trim()
     : wantCategoryLabels.join('、')
   const actions = buildActions(item.mode)
+
+  /**
+   * 底部操作按钮的点击行为。
+   *
+   * 「发起换物」已接入真实流程：未登录先引导登录，已登录跳转 `/barter/apply/{itemId}` 选物品 + 填留言；
+   * 「立即购买 / 联系对方 / 联系卖家」尚未开发，仍给占位提示（见 docs/PROGRESS.md 待做）。
+   * 这里的判断只做体验优化，后端仍会独立校验（见 docs/SECURITY.md 1.3）。
+   */
+  const handleAction = (action: ActionButton): void => {
+    if (action.key !== 'barter') {
+      messageApi.info(`${action.label}：功能开发中，敬请期待`)
+      return
+    }
+
+    if (!user) {
+      messageApi.warning('请先登录')
+      navigate('/login')
+      return
+    }
+
+    // 不能和自己换：后端同样会返回 400「不能和自己换」，这里提前拦住，减少无效请求
+    if (item.ownerId === user.id) {
+      messageApi.warning('不能对自己发布的物品发起换物')
+      return
+    }
+
+    navigate(`/barter/apply/${item.id}`)
+  }
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
@@ -292,10 +324,7 @@ const ItemDetail: FC = () => {
                     type={action.type}
                     icon={action.icon}
                     block={isMobile}
-                    onClick={() => {
-                      // 换物 / 下单流程尚未开发（见 docs/PROGRESS.md 待做），先给出明确反馈
-                      messageApi.info(`${action.label}：功能开发中，敬请期待`)
-                    }}
+                    onClick={() => handleAction(action)}
                   >
                     {action.label}
                   </Button>
