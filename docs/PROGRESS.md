@@ -2,7 +2,7 @@
 
 > 记录当前完成度与后续计划。每完成一项请更新本文档。
 
-最后更新：前端「我的换物」完成——`/barters` 列表（全部 / 我发起的 / 我收到的）+ `/barters/:id` 详情占位
+最后更新：前端「换物详情 + 同意 / 拒绝」完成——`/barters/:id` 接入 `GET /api/barters/{id}`，接收方可 `accept` / `reject`
 
 ## 已完成
 
@@ -139,6 +139,31 @@
   - 安全（守 [SECURITY.md](./SECURITY.md) 底线）：登录态只用于显示与引导，不手写 `Authorization`；
     后端按 token 返回数据，前端不做「前端校验代替后端权限」
 
+- [x] **前端换物详情 + 同意 / 拒绝（`GET /api/barters/{id}`、`PUT .../accept`、`PUT .../reject`）**
+  - 接口：`api/barter.ts` 新增 `getBarterDetail(id)` / `acceptBarter(id)` / `rejectBarter(id)`，
+    路径省略 `/api` 前缀，token 仍由 `request.ts` 拦截器自动携带
+  - 工具：`utils/error.ts` 新增 `getHttpStatus(error)`，从 AxiosError 中取 HTTP 状态码，
+    供页面区分 403（无权查看）/ 404（申请不存在）/ 401（登录失效）
+  - 页面：`pages/BarterDetail.tsx` 由占位页改为真实详情页（路由 `/barters/:id`，需登录）
+    - 未登录：先幂等 `useUserStore.getState().init()`，再 `message.warning('请先登录')` +
+      `navigate('/login', { replace: true })`，避免刷新时误跳登录页
+    - 展示：返回按钮（回 `/barters`）、标题「换物详情」+ 状态 Tag、换物编号；
+      `Descriptions` 展示发起方 / 接收方（用户 ID + 「我 / 对方」标签）、双方物品
+      （`物品 #fromItemId 换 物品 #toItemId`，后端暂无标题）、非 0 差价（含补差价方向）、申请时间；
+      留言用带左边框的引用块展示（`white-space: pre-wrap` 保留换行）
+    - 权限：`当前用户 id === toUserId && status === 'PENDING'` 才显示「拒绝换物」（danger）/
+      「同意换物」（primary）；否则显示「等待对方处理」或「该申请已处理完毕」
+    - 操作：`Modal.confirm` 二次确认 → `submitting = 'accept' | 'reject'`（两个按钮同时禁用、
+      当前按钮 loading）→ 调接口 → 成功 `message.success` 后重新 `GET /api/barters/{id}` 刷新，
+      失败用 `getErrorMessage()` 展示后端 `message`；不直接改本地 `status`，以后端为准
+    - 其他：`requestIdRef` 丢弃过期响应；404 显示 `Result`「换物申请不存在」、
+      403 显示「无权查看」、其他 `message.error` + `Result`「加载失败」并可重新加载；
+      「联系对方」按钮提示「聊天功能开发中」
+  - 路由：`router/index.tsx` 的 `/barters/:id` 注释同步为真实详情页
+  - 安全（守 [SECURITY.md](./SECURITY.md) 底线）：登录态与「是否接收方」只用于显示 / 隐藏操作入口，
+    真正的权限（仅接收方）与状态（仅 PENDING）由后端判定；页面不手写 `Authorization`，
+    不把前端判断当权限依据，照常处理 401 / 403 / 400
+
 ## 进行中
 
 - [ ] 无（当前迭代已收尾，下一步从「待做」取）
@@ -153,8 +178,9 @@
 - [ ] **换物流程**
   - [x] 发起换物申请（前端，`/barter/apply/:itemId` → `POST /api/barters`）
   - [x] 我的换物列表（`/barters`，`GET /api/barters?type=all|from|to`）
-  - [ ] 换物详情（`/barters/:id` 当前为占位页，需接入详情数据）
-  - [ ] 接受 / 拒绝 / 完成（依赖后端的换物状态流转接口）
+  - [x] 换物详情（`/barters/:id`，`GET /api/barters/{id}`）
+  - [x] 接受 / 拒绝（`PUT /api/barters/{id}/accept|reject`，仅接收方、仅 `PENDING`）
+  - [ ] 完成换物（`DONE` 状态流转）与取消申请（`CANCELLED`），依赖后端补充接口
 - [ ] **二手下单**
   - 购物车 → 下单 → 订单列表/详情/状态流转
   - 依赖 `GET /api/orders` 及后续下单接口
@@ -182,8 +208,10 @@
   「我的换物」卡片已链接到 `/barters`（卡片本身仍是空态与入口），
   「我的物品 / 我的订单」两块卡片仍无接口、为空态；
   `/messages`、`/videos` 无接口，消息页的 3 条会话是 mock 数据。
-- `/barters` 列表只返回 `fromItemId` / `toItemId`，后端暂未带物品标题，界面用「物品 #ID」占位；
-  `/barters/:id` 详情页仍是占位页，未接单条详情与接受 / 拒绝操作。
+- `/barters` 列表与 `/barters/:id` 详情都只返回 / 展示 `fromItemId` / `toItemId`，后端暂未带物品标题，
+  界面用「物品 #ID」占位；接口补充标题后替换 `Barters.tsx` 与 `BarterDetail.tsx` 的展示字段即可。
+- 换物详情页暂未做「取消申请」「确认完成」按钮，状态流转只覆盖接收方的同意 / 拒绝；
+  「联系对方」仍是占位提示（消息功能未开发）。
 - 详情页「收藏」按钮只提示开发中，未落库；卖家信用分字段后端暂无，界面显示 `--`。
 - 发起换物：`BarterApply` 的「我的物品」是 `GET /api/items` 全量拉取后前端过滤
   （后端 `GET /api/items` 不支持 `ownerId`），物品多时会浪费流量，后续应改为服务端筛选；
@@ -192,7 +220,7 @@
   才能看到刚提交的申请（也可从导航用户下拉的「我的换物」进入）。
 - `useCartStore` 只有本地状态，未持久化、未与后端同步；购物车页面尚未开发（点击仅提示占位）。
 - 用户系统：登录态只用于显示/隐藏入口，**没有**统一路由守卫——未登录也能打开 `/profile` 等页面
-  （`/barter/apply/:itemId` 与 `/barters` 是在页面内自带登录前置判断的两个路由）；
+  （`/barter/apply/:itemId`、`/barters`、`/barters/:id` 是在页面内自带登录前置判断的三个路由）；
   登录后固定跳首页，不支持回跳登录前的地址；
   首屏用 localStorage 里的 `user` 缓存渲染，尚未调用 `GET /api/auth/me` 做权威刷新。
 - 401 已在 `request.ts` 统一处理（清除本地登录态），但**不自动跳转**，也尚未统一各页面的

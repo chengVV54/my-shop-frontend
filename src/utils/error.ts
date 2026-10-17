@@ -32,3 +32,17 @@ export function getErrorMessage(error: unknown, fallback = '操作失败，请�
 
   return fallback
 }
+
+/**
+ * 从请求异常中提取 HTTP 状态码。
+ *
+ * 后端对「不存在 / 无权限 / 未登录」返回的是 HTTP 状态码（404 / 403 / 401），
+ * 而 `getErrorMessage()` 只负责文案。页面需要按状态码切换不同错误态时用本函数，
+ * 非 Axios 异常（如自己 `throw new Error` 的业务失败）返回 `undefined`。
+ */
+export function getHttpStatus(error: unknown): number | undefined {
+  if (axios.isAxiosError(error)) {
+    return error.response?.status
+  }
+  return undefined
+}

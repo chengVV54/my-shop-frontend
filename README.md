@@ -57,7 +57,7 @@ my-shop-frontend/
 │   ├── api/              # 接口层
 │   │   ├── request.ts    # axios 实例（baseURL: /api，请求拦截器注入 token，响应拦截器返回 data 并处理 401）
 │   │   ├── auth.ts       # 用户鉴权接口（注册 / 登录 / 获取当前用户）
-│   │   └── barter.ts     # 换物接口（发起换物申请 / 我的换物列表）
+│   │   └── barter.ts     # 换物接口（发起 / 列表 / 详情 / 同意 / 拒绝）
 │   ├── components/       # 通用组件
 │   │   ├── Layout/
 │   │   │   └── index.tsx # 全局布局（导航栏 + 内容区 + 页脚，含登录态用户区）
@@ -71,7 +71,7 @@ my-shop-frontend/
 │   │   ├── Barter.tsx        # 换物页
 │   │   ├── BarterApply.tsx   # 发起换物（选我的物品 + 留言）
 │   │   ├── Barters.tsx       # 我的换物（我发起 / 我收到，需登录）
-│   │   ├── BarterDetail.tsx  # 换物详情（占位，下一步接入）
+│   │   ├── BarterDetail.tsx  # 换物详情（双方 / 留言 / 状态，接收方可同意或拒绝）
 │   │   ├── SecondHand.tsx    # 二手页
 │   │   ├── PublishItem.tsx   # 发布物品
 │   │   ├── Messages.tsx      # 消息（占位）
@@ -118,7 +118,7 @@ my-shop-frontend/
 | /barter | Barter | 换物入口 |
 | /barter/apply/:itemId | BarterApply | 发起换物（需登录：选我的在架物品 + 留言） |
 | /barters | Barters | 我的换物（需登录：全部 / 我发起的 / 我收到的） |
-| /barters/:id | BarterDetail | 换物详情（占位，下一步接入真实数据） |
+| /barters/:id | BarterDetail | 换物详情（需登录：接收方可在待处理时同意 / 拒绝） |
 | /second-hand | SecondHand | 二手入口 |
 | /publish | PublishItem | 发布物品 |
 | /messages | Messages | 消息（占位） |
@@ -194,9 +194,30 @@ npm run dev   # http://localhost:5173
   双方物品 ID（如 `物品 #1 换 物品 #2`）、留言、格式化时间；点击整卡进入 `/barters/:id`。
 - **状态处理**：加载中 `Spin`、空态 `Empty`「暂无换物记录」、请求失败 `message.error`；
   用 `requestIdRef` 丢弃过期响应，快速切换筛选也不会串数据。
-- **详情占位**：`/barters/:id` 目前由 `BarterDetail.tsx` 渲染「换物详情 #id（开发中）」+「返回列表」按钮，
-  下一步接入双方物品、留言、状态流转与接受 / 拒绝操作。
+- **详情入口**：点击整卡进入 `/barters/:id`，由 `BarterDetail.tsx` 展示详情并处理同意 / 拒绝
+  （见下一节）。
 - **展示限制**：后端列表暂未返回物品标题，先用物品 ID 占位；接口补充标题后只需替换 `Barters.tsx` 的展示字段。
+
+## 换物详情与同意 / 拒绝
+
+`/barters/:id` 由 `src/pages/BarterDetail.tsx` 渲染（需登录），是换物申请的处理页。
+
+- **登录守卫**：进入页面先幂等执行 `useUserStore.getState().init()`（原因同「我的换物」），
+  未登录提示「请先登录」并 `replace` 到 `/login`。
+- **数据**：`GET /api/barters/{id}`（`api/barter.ts` 的 `getBarterDetail`）。
+  页面展示「换物详情」+ 状态 Tag、换物编号、发起方 / 接收方（用户 ID +「我 / 对方」标签）、
+  双方物品 ID（`物品 #1 换 物品 #2`）、非 0 差价（含补差价方向）、申请时间；
+  留言用带左边框的引用块展示并保留换行。
+- **权限与操作**：只有 `当前用户 id === toUserId` 且 `status === 'PENDING'` 才显示
+  「拒绝换物」（danger）与「同意换物」（primary）；否则显示「等待对方处理」或「该申请已处理完毕」。
+  这是显示层判断，后端仍会校验接收方身份与 `PENDING` 状态。
+- **二次确认与提交**：点击按钮先弹 `Modal.confirm`；确认后设置 `submitting`，
+  两个按钮同时禁用、当前按钮 loading，防止重复提交。成功后 `message.success` 并重新
+  `GET /api/barters/{id}` 刷新（不直接改本地状态），失败按后端 `message` 提示。
+- **错误处理**：404 → `Result`「换物申请不存在」；403 → `Result`「无权查看」；
+  其他 → `message.error` + 「加载失败」并可重新加载；401 由拦截器清登录态后引导重新登录。
+- **联系对方**：按钮目前只是占位，点击提示「聊天功能开发中」（消息功能未开发）。
+- **展示限制**：后端详情未返回物品标题，先用物品 ID 占位，接口补充标题后替换展示字段即可。
 
 ## 核心数据模型
 
@@ -259,10 +280,14 @@ setItems(res.data)
 | GET | `/api/auth/me` | 获取当前登录用户，需 `Authorization: Bearer <token>` | 已封装（`api/auth.ts` 的 `getCurrentUser`，暂无页面调用） |
 | POST | `/api/barters` | 发起换物申请，Body `{ toItemId, fromItemId, message? }`，需登录 | 已对接（BarterApply） |
 | GET | `/api/barters` | 换物申请列表，支持 `?type=all/from/to`，需登录 | 已对接（Barters） |
+| GET | `/api/barters/{id}` | 换物申请详情（仅申请双方），需登录 | 已对接（BarterDetail） |
+| PUT | `/api/barters/{id}/accept` | 同意换物申请（仅接收方、仅 `PENDING`），需登录 | 已对接（BarterDetail） |
+| PUT | `/api/barters/{id}/reject` | 拒绝换物申请（仅接收方、仅 `PENDING`），需登录 | 已对接（BarterDetail） |
 | GET | `/api/orders` | 二手订单列表 | 待对接 |
 
-> 「物品详情」页的「立即购买 / 联系对方 / 联系卖家」按钮目前只提示「功能开发中」，
-> 「发布物品」页的提交同理，尚未写入后端；「发起换物」已接入 `POST /api/barters`。
+> 「物品详情」页的「立即购买 / 联系对方 / 联系卖家」按钮、换物详情页的「联系对方」按钮
+> 目前只提示「功能开发中」，「发布物品」页的提交同理，尚未写入后端；
+> 「发起换物」「换物详情」「同意 / 拒绝」已接入后端。
 
 ## 开发进度
 
@@ -274,8 +299,9 @@ setItems(res.data)
 - [x] 用户系统（注册 / 登录 / 登录态 + 测试账号）
 - [x] 发起换物（详情页入口 + `/barter/apply/:itemId` + `POST /api/barters`）
 - [x] 我的换物列表（`/barters`：全部 / 我发起的 / 我收到的 + 登录守卫）
-- [x] 换物详情占位页（`/barters/:id`）
-- [ ] 接受与拒绝换物（依赖后端状态流转接口）
+- [x] 换物详情（`/barters/:id`：双方 / 物品 ID / 差价 / 留言 / 状态）
+- [x] 同意与拒绝换物（`PUT /api/barters/{id}/accept|reject`，仅接收方、仅 `PENDING`）
+- [ ] 取消申请 / 确认完成换物（依赖后端补充状态流转接口）
 - [ ] 二手下单
 - [ ] 消息
 - [ ] 个人中心（我的物品 / 我的订单接入真实数据）

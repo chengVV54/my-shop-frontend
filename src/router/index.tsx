@@ -29,7 +29,7 @@ const AppRouter: FC = () => {
         <Route path="/barter/apply/:itemId" element={<BarterApply />} />
         {/* 我的换物：我发起 / 我收到的换物申请（需登录） */}
         <Route path="/barters" element={<Barters />} />
-        {/* 换物详情：下一步接入详情数据，当前为占位页 */}
+        {/* 换物详情：查看双方物品 / 留言 / 状态，接收方可同意或拒绝（需登录） */}
         <Route path="/barters/:id" element={<BarterDetail />} />
         <Route path="/second-hand" element={<SecondHand />} />
         <Route path="/publish" element={<PublishItem />} />

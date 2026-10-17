@@ -55,6 +55,9 @@ const items = res.data
 | POST | `/api/auth/login` | 用户登录，返回 token | `Login.tsx`（经 `api/auth.ts`） |
 | GET | `/api/auth/me` | 获取当前登录用户 | 已封装（`api/auth.ts` 的 `getCurrentUser`），暂无页面调用 |
 | GET | `/api/barters` | 换物申请列表，可选 `type=all/from/to` | `Barters.tsx`（经 `api/barter.ts`） |
+| GET | `/api/barters/{id}` | 换物申请详情（仅申请双方可看） | `BarterDetail.tsx`（经 `api/barter.ts`） |
+| PUT | `/api/barters/{id}/accept` | 同意换物申请（仅接收方、仅 `PENDING`） | `BarterDetail.tsx`（经 `api/barter.ts`） |
+| PUT | `/api/barters/{id}/reject` | 拒绝换物申请（仅接收方、仅 `PENDING`） | `BarterDetail.tsx`（经 `api/barter.ts`） |
 | POST | `/api/barters` | 发起换物申请（需登录） | `BarterApply.tsx`（经 `api/barter.ts`） |
 | GET | `/api/orders` | 二手订单列表 | 暂无 |
 
@@ -139,7 +142,7 @@ token 失效时后端返回 **HTTP 401**，由 `request.ts` 的响应拦截器�
 | 请求头注入 | `request.ts` 请求拦截器统一加 `Authorization: Bearer <token>`，业务代码不手写 |
 | 登录态恢复 | `App.tsx` 启动时调用 `useUserStore.init()` 读取上述两个键 |
 | 401 处理 | 响应拦截器执行 `useUserStore.logout()` 清除本地登录态，**不自动跳转**，由页面决定后续引导 |
-| 登录前置页面 | `/barter/apply/:itemId`、`/barters` 在页面内判断登录态：未登录提示后 `replace` 到 `/login`（尚未做统一路由守卫） |
+| 登录前置页面 | `/barter/apply/:itemId`、`/barters`、`/barters/:id` 在页面内判断登录态：未登录提示后 `replace` 到 `/login`（尚未做统一路由守卫） |
 | 权限判断 | 前端登录态只用于显示/隐藏入口，权限最终判断一律在后端 |
 
 > 注意：`user` 缓存只是「先渲染再校验」的显示优化；需要权威数据时调用 `GET /api/auth/me`。
@@ -192,7 +195,8 @@ setBarters(Array.isArray(res.data) ? res.data : [])
   `type` 只是视角参数，前端不传 userId。
 - 列表暂未返回物品标题，页面用「物品 #fromItemId 换 物品 #toItemId」占位；
   状态标签文案与颜色统一来自 `src/utils/barter.ts`（`getBarterStatusLabel` / `getBarterStatusColor`）。
-- 单条详情 `/barters/:id` 当前是占位页（`BarterDetail.tsx`），尚未调用单条详情接口。
+- 单条详情 `/barters/:id` 由 `BarterDetail.tsx` 接入 `GET /api/barters/{id}`；
+  接收方可在状态为 `PENDING` 时同意 / 拒绝（见下文「GET /api/barters/{id}」与两个 PUT 接口）。
 
 ### POST /api/barters（发起换物）
 
@@ -231,6 +235,128 @@ setBarters(Array.isArray(res.data) ? res.data : [])
 - 表单校验只做「必须选一件物品」与留言长度，提交时把留言 `trim()`，空串不发送；
 - 未登录直接跳 `/login`；提交成功后提示「已发起换物申请」并跳 `/profile`；
 - 失败用 `utils/error.ts` 的 `getErrorMessage()` 取后端 `message`，不自行编造原因。
+
+### GET /api/barters/{id}（换物详情）
+
+请求头：`Authorization: Bearer <token>`（**必须有**，未登录返回 HTTP 401）
+
+路径参数：
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `id` | number | 是 | 换物申请 ID |
+
+响应 `data`：`BarterRequest`（后端 `BarterRequestVO`），结构同列表项，示例：
+
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "id": 3,
+    "fromUserId": 1,
+    "toUserId": 2,
+    "fromItemId": 1,
+    "toItemId": 2,
+    "message": "换吗？",
+    "priceDiff": 0,
+    "status": "PENDING",
+    "createdAt": "2026-10-16 23:59:44"
+  }
+}
+```
+
+错误码：
+
+| HTTP 状态 | 含义 | 前端表现 |
+| --- | --- | --- |
+| 401 | 未登录 / token 失效 | 拦截器清除登录态，页面提示「登录已失效」并跳 `/login` |
+| 403 | 当前用户不是申请双方（非当事人） | `Result status="403"`「无权查看」 |
+| 404 | 换物申请不存在 | `Result status="404"`「换物申请不存在」 |
+| 其他 | 网络异常 / 超时 / 业务 `code !== 200` | `message.error` + `Result status="error"`「加载失败」 |
+
+前端接入（`src/api/barter.ts` + `src/pages/BarterDetail.tsx`）：
+
+```ts
+const res = await getBarterDetail(Number(id))
+if (!res || res.code !== 200 || !res.data) {
+  throw new Error(res?.message || `接口返回异常：code=${res?.code}`)
+}
+setBarter(res.data)
+```
+
+- 页面 `/barters/:id` 需登录：进入 effect 先幂等执行 `useUserStore.getState().init()`，
+  未登录 `message.warning('请先登录')` 后 `navigate('/login', { replace: true })`。
+- 用 `requestIdRef` 丢弃过期响应（处理完申请后刷新详情时，避免旧响应覆盖新状态）。
+- 错误态用 `utils/error.ts` 的 `getHttpStatus()` 区分 403 / 404；
+  `Result` 提供「返回我的换物」与（非 404 时）「重新加载」。
+- 双方物品暂时只展示 ID（`物品 #fromItemId 换 物品 #toItemId`），后端接口未带物品标题。
+
+### PUT /api/barters/{id}/accept（同意换物）
+
+请求头：`Authorization: Bearer <token>`（**必须有**，未登录返回 HTTP 401）
+
+路径参数：`id`（number，换物申请 ID）
+
+请求体：无
+
+响应 `data`：更新后的 `BarterRequest`（`status` 变为 `ACCEPTED`）。
+
+错误码：
+
+| HTTP 状态 | 含义 |
+| --- | --- |
+| 401 | 未登录 / token 失效（`request.ts` 拦截器清除本地登录态） |
+| 403 | 当前用户不是接收方（`toUserId`） |
+| 400 | 申请状态不是 `PENDING`（已被处理 / 已取消等） |
+
+前端实现（`src/api/barter.ts` 的 `acceptBarter()` + `src/pages/BarterDetail.tsx`）：
+
+```ts
+const res = await acceptBarter(id)
+if (!res || res.code !== 200) {
+  throw new Error(res?.message || `同意换物失败：code=${res?.code}`)
+}
+```
+
+- 只有 `当前用户 id === toUserId` 且 `status === 'PENDING'` 才显示「同意换物」按钮；
+  这是显示层判断，权限与状态仍由后端校验。
+- 点击后先弹 `Modal.confirm` 二次确认，确认后设置 `submitting = 'accept'`，
+  两个操作按钮同时禁用、当前按钮显示 loading，防止重复提交。
+- 成功后 `message.success('已同意换物申请')`，再调用 `GET /api/barters/{id}` 刷新详情，
+  让状态以后端为准（不在本地直接改 `status`）。
+- 失败用 `getErrorMessage()` 展示后端 `message`（401 / 403 / 400 不自行编造原因）。
+
+### PUT /api/barters/{id}/reject（拒绝换物）
+
+请求头：`Authorization: Bearer <token>`（**必须有**，未登录返回 HTTP 401）
+
+路径参数：`id`（number，换物申请 ID）
+
+请求体：无
+
+响应 `data`：更新后的 `BarterRequest`（`status` 变为 `REJECTED`）。
+
+错误码与 `accept` 完全一致：
+
+| HTTP 状态 | 含义 |
+| --- | --- |
+| 401 | 未登录 / token 失效 |
+| 403 | 当前用户不是接收方（`toUserId`） |
+| 400 | 申请状态不是 `PENDING` |
+
+前端实现（`src/api/barter.ts` 的 `rejectBarter()` + `src/pages/BarterDetail.tsx`）：
+
+```ts
+const res = await rejectBarter(id)
+if (!res || res.code !== 200) {
+  throw new Error(res?.message || `拒绝换物失败：code=${res?.code}`)
+}
+```
+
+- 与「同意」共用同一套权限判断、二次确认、`submitting` 状态与刷新逻辑；
+  按钮为 `danger` 样式，确认框的 `okButtonProps.danger = true`，降低误触。
+- 成功后 `message.success('已拒绝换物申请')` 并重新拉取详情，页面状态标签变为「已拒绝」。
 
 ### GET /api/orders
 
