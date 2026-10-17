@@ -1,5 +1,5 @@
 import type { FC } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { Avatar, Button, Card, Col, Empty, Row, Space, Typography, theme } from 'antd'
 import { UserOutlined } from '@ant-design/icons'
 
@@ -12,7 +12,8 @@ const { Title, Text } = Typography
  *
  * 顶部用户信息来自 `useUserStore`（由 App 启动时从 localStorage 恢复，
  * 需要服务端最新数据时可调用 `GET /api/auth/me`）；未登录时引导去登录页。
- * 三块卡片仍是占位，后续分别接入 `GET /api/items?ownerId=me`、`GET /api/barters`、`GET /api/orders`。
+ * 「我的换物」已接入独立页 `/barters`（`GET /api/barters`）；
+ * 「我的物品 / 我的订单」仍是空态，后续分别接入 `GET /api/items` 过滤与 `GET /api/orders`。
  *
  * 注意：这里只根据登录态控制**展示**，真正的权限与数据归属由后端校验
  * （见 docs/SECURITY.md 1.3）。
@@ -74,8 +75,15 @@ const Profile: FC = () => {
           </Card>
         </Col>
         <Col xs={24} md={8}>
-          <Card title="我的换物">
-            <Empty description="暂无数据" style={{ padding: '24px 0' }} />
+          <Card title="我的换物" extra={<Link to="/barters">查看全部</Link>}>
+            <Empty
+              description="查看我发起和收到的换物申请"
+              style={{ padding: '24px 0' }}
+            >
+              <Button type="primary" onClick={() => navigate('/barters')}>
+                进入我的换物
+              </Button>
+            </Empty>
           </Card>
         </Col>
         <Col xs={24} md={8}>

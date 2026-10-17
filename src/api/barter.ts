@@ -21,7 +21,12 @@ export function createBarter(data: BarterApplyPayload) {
   return request.post<ApiResult<BarterRequest>>('/barters', data)
 }
 
-/** 我的换物申请列表：GET /api/barters，需要 Authorization: Bearer <token> */
-export function getBarters() {
-  return request.get<ApiResult<BarterRequest[]>>('/barters')
+/**
+ * 我的换物申请列表：GET /api/barters，需要 Authorization: Bearer <token>。
+ *
+ * `type` 用于区分视角：`from` 我发起的、`to` 我收到的、`all` 全部（不传等于 all）。
+ * 方向由后端根据 token 里的当前用户判定，前端不需要传 userId。
+ */
+export function getBarters(params?: { type?: 'from' | 'to' | 'all' }) {
+  return request.get<ApiResult<BarterRequest[]>>('/barters', { params })
 }

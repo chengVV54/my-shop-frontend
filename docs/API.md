@@ -54,7 +54,7 @@ const items = res.data
 | POST | `/api/auth/register` | 用户注册 | `Register.tsx`（经 `api/auth.ts`） |
 | POST | `/api/auth/login` | 用户登录，返回 token | `Login.tsx`（经 `api/auth.ts`） |
 | GET | `/api/auth/me` | 获取当前登录用户 | 已封装（`api/auth.ts` 的 `getCurrentUser`），暂无页面调用 |
-| GET | `/api/barters` | 换物申请列表 | 已封装（`api/barter.ts` 的 `getBarters`），暂无页面调用 |
+| GET | `/api/barters` | 换物申请列表，可选 `type=all/from/to` | `Barters.tsx`（经 `api/barter.ts`） |
 | POST | `/api/barters` | 发起换物申请（需登录） | `BarterApply.tsx`（经 `api/barter.ts`） |
 | GET | `/api/orders` | 二手订单列表 | 暂无 |
 
@@ -139,20 +139,60 @@ token 失效时后端返回 **HTTP 401**，由 `request.ts` 的响应拦截器�
 | 请求头注入 | `request.ts` 请求拦截器统一加 `Authorization: Bearer <token>`，业务代码不手写 |
 | 登录态恢复 | `App.tsx` 启动时调用 `useUserStore.init()` 读取上述两个键 |
 | 401 处理 | 响应拦截器执行 `useUserStore.logout()` 清除本地登录态，**不自动跳转**，由页面决定后续引导 |
+| 登录前置页面 | `/barter/apply/:itemId`、`/barters` 在页面内判断登录态：未登录提示后 `replace` 到 `/login`（尚未做统一路由守卫） |
 | 权限判断 | 前端登录态只用于显示/隐藏入口，权限最终判断一律在后端 |
 
 > 注意：`user` 缓存只是「先渲染再校验」的显示优化；需要权威数据时调用 `GET /api/auth/me`。
 
 ### GET /api/barters
 
-请求头：`Authorization: Bearer <token>`
+请求头：`Authorization: Bearer <token>`（**必须有**，未登录返回 HTTP 401）
 
-请求参数：无
+请求参数（query）：
 
-响应 `data`：`BarterRequest[]`
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `type` | `from` \| `to` \| `all` | 否 | 视角筛选：`from` 我发起的、`to` 我收到的、`all` 全部；不传等于 `all` |
 
-前端实现：`src/api/barter.ts` 的 `getBarters()`（已封装，暂无页面调用；
-「我的换物」独立页 `/barters` 仍未开发，见 docs/PROGRESS.md）。
+响应 `data`：`BarterRequest[]`，示例：
+
+```json
+{
+  "code": 200,
+  "data": [
+    {
+      "id": 3,
+      "fromUserId": 1,
+      "toUserId": 2,
+      "fromItemId": 1,
+      "toItemId": 2,
+      "message": "换吗？",
+      "priceDiff": 0,
+      "status": "PENDING",
+      "createdAt": "2026-10-16 23:59:44"
+    }
+  ]
+}
+```
+
+前端实现（`src/api/barter.ts` + `src/pages/Barters.tsx`）：
+
+```ts
+// 统一走 request，token 由 request.ts 拦截器自动注入
+const res = await getBarters({ type: 'all' }) // 'all' | 'from' | 'to'
+if (!res || res.code !== 200) throw new Error(res?.message)
+setBarters(Array.isArray(res.data) ? res.data : [])
+```
+
+- 页面 `/barters` 需登录：未登录先 `message.warning('请先登录')` 再 `navigate('/login', { replace: true })`；
+  直接刷新时先幂等执行 `useUserStore.getState().init()` 恢复 localStorage 登录态，避免误跳登录页。
+- 顶部 `Segmented` 切换「全部 / 我发起的 / 我收到的」，切换即按新的 `type` 重新请求；
+  用 `requestIdRef` 丢弃过期响应（参考 `ItemList.tsx`）。
+- 方向（我发起 / 我收到）以 `fromUserId === 当前用户 id` 判断；后端已按 token 过滤，
+  `type` 只是视角参数，前端不传 userId。
+- 列表暂未返回物品标题，页面用「物品 #fromItemId 换 物品 #toItemId」占位；
+  状态标签文案与颜色统一来自 `src/utils/barter.ts`（`getBarterStatusLabel` / `getBarterStatusColor`）。
+- 单条详情 `/barters/:id` 当前是占位页（`BarterDetail.tsx`），尚未调用单条详情接口。
 
 ### POST /api/barters（发起换物）
 
@@ -325,7 +365,8 @@ interface Order {
 ```
 
 枚举 → 中文文案由 `src/utils/item.ts` 统一提供（`getModeLabel` / `getConditionLabel` /
-`getCategoryLabel` / `getStatusLabel` 等），不要在各页面重复写映射表。
+`getCategoryLabel` / `getStatusLabel` 等），换物状态由 `src/utils/barter.ts` 的
+`getBarterStatusLabel` / `getBarterStatusColor` 提供，不要在各页面重复写映射表。
 
 ## 相关文档
 

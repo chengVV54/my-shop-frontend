@@ -63,6 +63,10 @@ const resolveSelectedKey = (pathname: string): string => {
   if (pathname === '/') {
     return '/'
   }
+  // 「我的换物」/barters 属于用户中心，先于 /barter 判断，避免被「换物」入口抢走高亮
+  if (pathname === '/barters' || pathname.startsWith('/barters/')) {
+    return '/profile'
+  }
   if (pathname.startsWith('/barter')) {
     return '/barter'
   }
