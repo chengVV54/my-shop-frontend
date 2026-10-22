@@ -44,6 +44,11 @@ const items = res.data
 鉴权失败（未登录、token 过期或非法）后端返回 **HTTP 401**，此时响应体可能为空。
 `src/api/request.ts` 的响应拦截器会捕获 401 并清除本地登录态，调用方仍需 `catch` 并给出提示。
 
+**业务失败不改 HTTP 状态**（重要）：除 Spring Security 层拦下的 401 / 403 外，
+参数非法、越权、状态不符等业务异常由后端 `GlobalExceptionHandler` 统一包成
+**HTTP 200 + `code` 非 200** 返回（如 400 / 403 / 404）。因此调用方**一律先判断 `res.code`**，
+不能只看 HTTP 状态，也不要用 `getHttpStatus()` 区分这类业务错误。
+
 ## 2. 已有接口
 
 | 方法 | 路径 | 说明 | 前端使用位置 |
@@ -51,6 +56,8 @@ const items = res.data
 | GET | `/api/health` | 健康检查，用于确认后端是否可用 | 暂无（可手工验证） |
 | GET | `/api/items` | 物品列表，可选 `mode` 筛选 | `Home.tsx`、`ItemList.tsx` |
 | GET | `/api/items/{id}` | 物品详情 | `ItemDetail.tsx` |
+| POST | `/api/items` | 发布物品（需登录） | `PublishItem.tsx`（经 `api/item.ts` 的 `createItem`） |
+| DELETE | `/api/items/{id}` | 下架物品（软删除，仅本人在架物品，需登录） | `ItemDetail.tsx`（经 `api/item.ts` 的 `deleteItem`） |
 | POST | `/api/auth/register` | 用户注册 | `Register.tsx`（经 `api/auth.ts`） |
 | POST | `/api/auth/login` | 用户登录，返回 token | `Login.tsx`（经 `api/auth.ts`） |
 | GET | `/api/auth/me` | 获取当前登录用户 | 已封装（`api/auth.ts` 的 `getCurrentUser`），暂无页面调用 |
@@ -95,6 +102,115 @@ await request.get<ApiResult<Item[]>>('/items', { params: { mode: 'BARTER' } })
 路径参数：`id`（number，物品 ID）
 
 响应 `data`：`Item`
+
+### POST /api/items
+
+发布物品，需要登录（`Authorization: Bearer <token>`）。
+
+请求体（`CreateItemPayload`，对应 `PublishItem` 表单）：
+
+```json
+{
+  "title": "九成新富士 X-T30 微单",
+  "description": "自用机...",
+  "category": "CAMERA",
+  "condition": "GOOD",
+  "mode": "BOTH",
+  "price": 4200.00,
+  "wantCategories": ["PHONE", "COMPUTER"],
+  "wantDescription": "想换 iPhone 15",
+  "allowPriceDiff": true
+}
+```
+
+字段约定：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `title` | string | 是 | 标题，后端上限 200 字（前端表单限 60） |
+| `description` | string | 否 | 描述；空串由前端转成不传 |
+| `category` | `ItemCategory` | 是 | 分类 |
+| `condition` | `ItemCondition` | 是 | 成色 |
+| `mode` | `BARTER` \| `SALE` \| `BOTH` | 是 | 交易模式（后端大小写不敏感，会归一化为大写） |
+| `price` | number | 条件 | 仅 `SALE` / `BOTH` 必填且 > 0；`BARTER` **不传** |
+| `wantCategories` | `ItemCategory[]` | 否 | 仅 `BARTER` / `BOTH` 传；`SALE` **不传** |
+| `wantDescription` | string | 否 | 仅 `BARTER` / `BOTH` 传；`SALE` **不传** |
+| `allowPriceDiff` | boolean | 否 | 仅 `BARTER` / `BOTH` 传；`SALE` **不传** |
+
+补充：
+
+- 请求体里**没有 `ownerId`**：发布者由后端从 JWT 解析，前端即使传了也不会生效，
+  避免伪造他人发布。`status`（初始 `AVAILABLE`）、`createdAt` 也由后端生成。
+- `price` / `wantCategories` 与 `mode` 的互斥关系由前端 `PublishItem` 的 `buildCreatePayload`
+  清洗保证；后端仍会独立校验（`SALE` / `BOTH` 缺 `price` 返回 400）。
+- 已知失败码：`401` 未登录 / token 失效；`400` 入参不合法（如缺 `price`、`mode` 非法）。
+
+响应 `data`：新建的 `Item`（含数据库自增 `id`，前端用它跳 `/items/{id}`）。
+
+前端调用示例：
+
+```ts
+import { createItem } from '@/api/item'
+
+const res = await createItem(payload)
+if (!res || res.code !== 200 || !res.data) {
+  throw new Error(res?.message || `发布失败：code=${res?.code}`)
+}
+navigate(`/items/${res.data.id}`)
+```
+
+### DELETE /api/items/{id}（下架物品）
+
+请求头：`Authorization: Bearer <token>`（**必须有**，未登录返回 HTTP 401）
+
+路径参数：
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `id` | number | 是 | 物品 ID |
+
+请求体：无
+
+响应 `data`：`null`（后端返回 `Result<Void>`），成功时 `code === 200`。
+
+**软删除**：后端只把 `status` 改成 `REMOVED`，**不删除数据库行**——物品可能已被换物申请 /
+订单引用，物理删除会让关联记录指向一个不存在的 id。因此下架后 `GET /api/items/{id}`
+仍能查到该物品，只是状态为「已下架」。
+
+错误码（后端校验顺序：登录 → 物品存在 → 归属 → 状态）：
+
+| HTTP 状态 | 业务 `code` | 含义 | 前端表现 |
+| --- | --- | --- | --- |
+| 200 | 404 | 物品不存在 | `message.error` 展示后端 `message` |
+| 200 | 403 | 越权，不是自己的物品（「只能删除自己的物品」） | 同上 |
+| 200 | 400 | 状态不是 `AVAILABLE`（「物品已被锁定或完成，无法删除」） | 同上 |
+| 401 | 401 | 未登录 / token 失效 | 拦截器清除登录态，页面提示「登录已失效」并跳 `/login` |
+
+> 注意：除 401 外，业务失败是 **HTTP 200 + 包装体 `code` 非 200**（后端 `GlobalExceptionHandler`
+> 统一用 `Result.error(code, message)` 输出）。所以调用方必须先判断 `res.code`，
+> 不能只看 HTTP 状态码，也不要用 `getHttpStatus()` 去区分 403 / 400。
+
+前端接入（`src/api/item.ts` + `src/pages/ItemDetail.tsx`）：
+
+```ts
+import { deleteItem } from '@/api/item'
+
+const res = await deleteItem(item.id)
+if (!res || res.code !== 200) {
+  throw new Error(res?.message || `下架失败：code=${res?.code}`)
+}
+```
+
+- 显示条件（`canRemove`）：**已登录** 且 `user.id === item.ownerId` 且 `item.status === 'AVAILABLE'`，
+  三者同时满足才渲染 `Button danger`「下架物品」（放在操作区 `Space` 内，不会被遮挡）；
+  这只是显示层判断，归属与状态最终由后端校验（见 [SECURITY.md](./SECURITY.md) 1.3）。
+- 点击先 `Modal.confirm` 二次确认，文案「确定要下架该物品吗？下架后将无法被其他人看到。」，
+  `okButtonProps.danger`；`onOk` 返回 Promise，确认框会自动 loading 直到请求结束。
+- 请求期间 `removing = true`，按钮 `loading` + `disabled`，避免重复提交。
+- 成功：`message.success('已下架')`，然后 `navigate('/profile', { replace: true })` 回个人中心
+  （用 `replace` 替换历史记录，避免「返回」又回到已下架的详情页）。
+- 失败：用 `getErrorMessage()` 优先展示后端 `message`（越权 / 状态锁定 / 不存在都不自行编造原因）；
+  若登录态已被 401 清掉，提示「登录已失效，请重新登录」并跳 `/login`。
 
 ### POST /api/auth/register
 
@@ -366,33 +482,8 @@ if (!res || res.code !== 200) {
 
 ## 3. 待开发接口（预留）
 
-以下接口尚未实现，前端相关页面也未接入；路径与字段为约定草案，实现时以本文档更新为准。
-
-| 方法 | 路径 | 说明 | 对应待办 |
-| --- | --- | --- | --- |
-| POST | `/api/items` | 发布物品（真实写库） | 发布物品 |
-
-### POST /api/items
-
-请求头：`Authorization: Bearer <token>`
-
-请求体（草案，对应 `PublishItem` 表单字段）：
-
-```json
-{
-  "title": "string",
-  "category": "CAMERA",
-  "condition": "LIKE_NEW",
-  "description": "string",
-  "mode": "BARTER",
-  "price": 399,
-  "wantCategories": ["BOOK"],
-  "wantDescription": "string",
-  "allowPriceDiff": true
-}
-```
-
-响应 `data`：新建的 `Item`。
+暂无。物品的发布（`POST /api/items`）与下架（`DELETE /api/items/{id}`）均已实现并接入前端，
+见「2. 已有接口」。
 
 ## 4. 核心数据模型
 
@@ -434,6 +525,24 @@ interface Item {
   allowPriceDiff?: boolean
   status: ItemStatus
   createdAt: string
+}
+```
+
+### CreateItemPayload（`src/types/item.ts`）
+
+`POST /api/items` 的请求体。只描述物品本身，不含 `ownerId` / `status` / `createdAt`：
+
+```ts
+interface CreateItemPayload {
+  title: string
+  description?: string
+  category: ItemCategory
+  condition: ItemCondition
+  mode: ItemMode
+  price?: number                   // 仅 SALE / BOTH
+  wantCategories?: ItemCategory[]  // 仅 BARTER / BOTH
+  wantDescription?: string         // 仅 BARTER / BOTH
+  allowPriceDiff?: boolean         // 仅 BARTER / BOTH
 }
 ```
 

@@ -57,6 +57,7 @@ my-shop-frontend/
 │   ├── api/              # 接口层
 │   │   ├── request.ts    # axios 实例（baseURL: /api，请求拦截器注入 token，响应拦截器返回 data 并处理 401）
 │   │   ├── auth.ts       # 用户鉴权接口（注册 / 登录 / 获取当前用户）
+│   │   ├── item.ts       # 物品接口（发布物品 POST /api/items）
 │   │   └── barter.ts     # 换物接口（发起 / 列表 / 详情 / 同意 / 拒绝）
 │   ├── components/       # 通用组件
 │   │   ├── Layout/
@@ -73,7 +74,7 @@ my-shop-frontend/
 │   │   ├── Barters.tsx       # 我的换物（我发起 / 我收到，需登录）
 │   │   ├── BarterDetail.tsx  # 换物详情（双方 / 留言 / 状态，接收方可同意或拒绝）
 │   │   ├── SecondHand.tsx    # 二手页
-│   │   ├── PublishItem.tsx   # 发布物品
+│   │   ├── PublishItem.tsx   # 发布物品（表单 + 提交 POST /api/items）
 │   │   ├── Messages.tsx      # 消息（占位）
 │   │   ├── Videos.tsx        # 视频（占位）
 │   │   ├── Profile.tsx       # 我的（展示当前登录用户）
@@ -85,7 +86,7 @@ my-shop-frontend/
 │   │   ├── useCartStore.ts  # 购物车（zustand）
 │   │   └── useUserStore.ts  # 登录态（token + 用户信息，持久化到 localStorage）
 │   ├── types/            # 类型定义
-│   │   ├── item.ts       # Item / ItemMode / ItemCondition / ItemCategory / ItemStatus / Order
+│   │   ├── item.ts       # Item / CreateItemPayload / ItemMode / ItemCondition / ItemCategory / ItemStatus / Order
 │   │   ├── barter.ts     # BarterStatus / BarterRequest（换物申请）
 │   │   ├── user.ts       # User（UserVO）/ LoginResponse
 │   │   └── index.ts      # 统一出口 + ApiResult<T> 响应包装体
@@ -120,7 +121,7 @@ my-shop-frontend/
 | /barters | Barters | 我的换物（需登录：全部 / 我发起的 / 我收到的） |
 | /barters/:id | BarterDetail | 换物详情（需登录：接收方可在待处理时同意 / 拒绝） |
 | /second-hand | SecondHand | 二手入口 |
-| /publish | PublishItem | 发布物品 |
+| /publish | PublishItem | 发布物品（需登录：提交 POST /api/items，成功后跳详情页） |
 | /messages | Messages | 消息（占位） |
 | /videos | Videos | 视频（占位） |
 | /profile | Profile | 我的 |
@@ -219,6 +220,22 @@ npm run dev   # http://localhost:5173
 - **联系对方**：按钮目前只是占位，点击提示「聊天功能开发中」（消息功能未开发）。
 - **展示限制**：后端详情未返回物品标题，先用物品 ID 占位，接口补充标题后替换展示字段即可。
 
+## 发布物品
+
+`/publish` 由 `src/pages/PublishItem.tsx` 渲染（需登录），提交 `POST /api/items` 真实写库。
+
+- **登录守卫**：进入页面先幂等执行 `useUserStore.getState().init()`（原因同上），
+  未登录提示「请先登录」并 `replace` 到 `/login`。
+- **表单与校验**：标题、分类、成色、描述、模式；`Form.useWatch('mode')` 条件显示
+  「价格」（SALE / BOTH）与「想换什么」（BARTER / BOTH）字段。
+  `SALE` / `BOTH` 价格必填且 > 0；`BARTER` / `BOTH` 的想换分类至少选一个。
+- **按模式清洗**：提交前 `buildCreatePayload(values)` 剔除与当前模式无关的字段——
+  `BARTER` 不带 `price`，`SALE` 不带 `wantCategories` / `wantDescription` / `allowPriceDiff`，
+  `BOTH` 两者都带；文本先 `trim()`，空串不传。
+- **提交结果**：调用 `src/api/item.ts` 的 `createItem()`，成功提示「发布成功」并跳
+  `/items/{后端返回的新 id}`；失败用 `getErrorMessage()` 展示后端 `message`，401 引导重新登录。
+- **图片**：当前接口请求体没有 `images` 字段，发布出来的物品图片为空数组，图片上传待后端支持后再补。
+
 ## 核心数据模型
 
 `src/types/item.ts` 定义了物品相关的全部类型：
@@ -232,6 +249,7 @@ npm run dev   # http://localhost:5173
 
 - `mode` 为 `SALE` 或 `BOTH` 时才有 `price`，也是唯一能加入购物车 / 下单的情况（见 `isPurchasable`）。
 - `mode` 为 `BARTER` 或 `BOTH` 时才有 `wantCategories` / `wantDescription` / `allowPriceDiff`。
+- `CreateItemPayload` 是发布物品的请求体：只描述物品本身，不含 `ownerId` / `status` / `createdAt`（由后端生成）。
 
 
 ## 后端接口说明
@@ -275,6 +293,7 @@ setItems(res.data)
 | --- | --- | --- | --- |
 | GET | `/api/items` | 物品列表，支持 `?mode=BARTER/SALE/BOTH` | 已对接（ItemList / Home） |
 | GET | `/api/items/{id}` | 物品详情 | 已对接（ItemDetail） |
+| POST | `/api/items` | 发布物品，需登录，Body 为 `CreateItemPayload` | 已对接（PublishItem） |
 | POST | `/api/auth/register` | 用户注册，Body `{ username, password }` | 已对接（Register） |
 | POST | `/api/auth/login` | 用户登录，返回 `{ token, user }` | 已对接（Login） |
 | GET | `/api/auth/me` | 获取当前登录用户，需 `Authorization: Bearer <token>` | 已封装（`api/auth.ts` 的 `getCurrentUser`，暂无页面调用） |
@@ -286,8 +305,8 @@ setItems(res.data)
 | GET | `/api/orders` | 二手订单列表 | 待对接 |
 
 > 「物品详情」页的「立即购买 / 联系对方 / 联系卖家」按钮、换物详情页的「联系对方」按钮
-> 目前只提示「功能开发中」，「发布物品」页的提交同理，尚未写入后端；
-> 「发起换物」「换物详情」「同意 / 拒绝」已接入后端。
+> 目前只提示「功能开发中」；
+> 「发布物品」「发起换物」「换物详情」「同意 / 拒绝」已接入后端。
 
 ## 开发进度
 
@@ -295,7 +314,7 @@ setItems(res.data)
 - [x] 全局 Layout（导航栏 + 页脚）
 - [x] 物品列表（对接后端）
 - [x] 物品详情（含发起换物入口）
-- [x] 发布物品（表单占位）
+- [x] 发布物品（表单 + `POST /api/items`，按 mode 清洗字段，成功跳详情页 + 登录守卫）
 - [x] 用户系统（注册 / 登录 / 登录态 + 测试账号）
 - [x] 发起换物（详情页入口 + `/barter/apply/:itemId` + `POST /api/barters`）
 - [x] 我的换物列表（`/barters`：全部 / 我发起的 / 我收到的 + 登录守卫）

@@ -47,6 +47,7 @@ my-shop-frontend/
     ├── api/                # HTTP 层，统一封装 axios
     │   ├── request.ts      # axios 实例 + 拦截器（注入 token / 返回 data / 401 清登录态）+ Request 类型
     │   ├── auth.ts         # 鉴权接口：register / login / getCurrentUser
+    │   ├── item.ts         # 物品接口：createItem（发布 POST /api/items）/ deleteItem（下架 DELETE /api/items/{id}）
     │   └── barter.ts       # 换物接口：createBarter / getBarters / getBarterDetail / accept / reject
     ├── components/         # 可复用展示型组件，一个组件一个目录
     │   ├── Layout/         # 全局布局：顶部导航(响应式，含登录态用户区) + 内容区(Outlet) + 页脚
@@ -55,13 +56,13 @@ my-shop-frontend/
     ├── pages/              # 路由级页面组件
     │   ├── Home.tsx        # 首页：Hero + 热门分类 + 最新发布
     │   ├── ItemList.tsx    # 物品列表：模式/分类/成色筛选 + 排序 + 分页
-    │   ├── ItemDetail.tsx  # 物品详情（含卖家信息区 + 发起换物入口）
+    │   ├── ItemDetail.tsx  # 物品详情（卖家信息区 + 发起换物入口 + 本人在架物品的「下架」入口）
     │   ├── Barter.tsx      # 换物页（BARTER / BOTH）
     │   ├── BarterApply.tsx # 发起换物（选我的在架物品 + 留言，提交 POST /api/barters）
     │   ├── Barters.tsx     # 我的换物（GET /api/barters?type=all|from|to，需登录）
     │   ├── BarterDetail.tsx # 换物详情（/barters/:id，展示双方 / 留言 / 状态，接收方可同意 / 拒绝）
     │   ├── SecondHand.tsx  # 二手页（SALE / BOTH）
-    │   ├── PublishItem.tsx # 发布物品（表单占位，未写库）
+    │   ├── PublishItem.tsx # 发布物品（表单 + POST /api/items，成功跳详情页，需登录）
     │   ├── Messages.tsx    # 消息页（占位：会话列表 + 聊天区）
     │   ├── Videos.tsx      # 视频页（占位）
     │   ├── Profile.tsx     # 我的页（登录用户信息 + 三块卡片）
@@ -92,13 +93,13 @@ my-shop-frontend/
 | --- | --- | --- |
 | `/` | `Home` | 首页：Hero + 热门分类 8 个入口 + 最新 8 件物品 |
 | `/items` | `ItemList` | 物品列表：模式 / 分类 / 成色筛选 + 排序 + 分页（每页 12 条，前端计算） |
-| `/items/:id` | `ItemDetail` | 物品详情（卖家信息区 + 收藏占位；BARTER / BOTH 显示「发起换物」入口） |
+| `/items/:id` | `ItemDetail` | 物品详情（卖家信息区 + 收藏占位；BARTER / BOTH 显示「发起换物」入口；本人且 `AVAILABLE` 时显示「下架物品」） |
 | `/barter` | `Barter` | 换物入口：只展示 `BARTER` / `BOTH` |
 | `/barter/apply/:itemId` | `BarterApply` | 发起换物：用「我的在架物品」换 `:itemId` 这件物品（需登录，未登录跳 `/login`） |
 | `/barters` | `Barters` | 我的换物：全部 / 我发起的 / 我收到的（需登录，未登录跳 `/login`） |
 | `/barters/:id` | `BarterDetail` | 换物详情：双方 / 物品 ID / 差价 / 留言 / 状态；接收方在 `PENDING` 时可同意 / 拒绝（需登录，未登录跳 `/login`） |
 | `/second-hand` | `SecondHand` | 二手入口：只展示 `SALE` / `BOTH` |
-| `/publish` | `PublishItem` | 发布表单（当前仅 `console.log`，未提交后端） |
+| `/publish` | `PublishItem` | 发布物品：按模式条件显示价格 / 换物偏好，提交 `POST /api/items` 后跳详情页（需登录，未登录跳 `/login`） |
 | `/messages` | `Messages` | 消息（占位）：左侧 mock 会话列表 + 右侧聊天区 |
 | `/videos` | `Videos` | 视频（占位，仅空态） |
 | `/profile` | `Profile` | 我的：当前登录用户信息 + 我的物品 / 换物 / 订单（换物卡片已链接 `/barters`，其余仍为空态） |
@@ -114,16 +115,39 @@ my-shop-frontend/
 - 「换物」「二手」两个入口都需要包含 `BOTH`，而后端 `GET /api/items` 的 `mode` 参数只支持单值，
   因此 `ModeItemList` 请求一次全量后在**前端**过滤（`modes.includes(item.mode)`）；
   同理列表页的筛选 / 排序 / 分页也都在前端完成，数据量大时应改为服务端分页与筛选。
-- `/barter/apply/:itemId`、`/barters`、`/barters/:id` 是**三个带登录前置判断的页面**：
+- `/barter/apply/:itemId`、`/barters`、`/barters/:id`、`/publish` 是**四个带登录前置判断的页面**：
   `BarterApply` 由 `ItemDetail` 的「发起换物」按钮在未登录时提示并跳 `/login`，
   页面自身在 `useEffect` 里再判断一次，未登录直接 `replace` 到 `/login`；
-  `Barters` 与 `BarterDetail` 同样在 `useEffect` 里先判断登录态，
+  `Barters`、`BarterDetail` 与 `PublishItem` 同样在 `useEffect` 里先判断登录态，
   未登录 `message.warning('请先登录')` 后 `replace`。
   注意顺序问题：`App.tsx` 的 `useUserStore.init()`（恢复 localStorage 登录态）写在**父组件**的
-  `useEffect` 里，而子组件 effect 先执行，所以直接刷新 `/barter/apply/1`、`/barters` 或
-  `/barters/1` 时 store 里的 `user` 仍是 `null`。这三个页面因此都先调用一次幂等的
+  `useEffect` 里，而子组件 effect 先执行，所以直接刷新 `/barter/apply/1`、`/barters`、
+  `/barters/1` 或 `/publish` 时 store 里的 `user` 仍是 `null`。这四个页面因此都先调用一次幂等的
   `useUserStore.getState().init()` 再读登录态，否则会把已登录用户误弹到登录页。
   这是当前「没有全局路由守卫」的临时处理，后续做统一守卫时（见 docs/SECURITY.md 待做）应一并收敛。
+- `/publish` 的发布流程：
+  - 表单用 `Form.useWatch('mode')` 条件渲染「价格」与「想换什么」字段；
+    前端补强规则：`SALE` / `BOTH` 价格必填且 > 0，`BARTER` / `BOTH` 想换分类至少选一个。
+  - 提交时 `buildCreatePayload(values)` 按 mode **清洗字段**：`BARTER` 不传 `price`，
+    `SALE` 不传 `wantCategories` / `wantDescription` / `allowPriceDiff`，`BOTH` 两者都传；
+    文本字段先 `trim()`，空串不传。必须清洗的原因：antd `Form` 默认 `preserve: true`，
+    被条件渲染隐藏的 `Form.Item` 的值仍留在 form store 里，`onFinish` 可能拿到上一次模式残留的字段。
+  - 调 `api/item.ts` 的 `createItem()`（`POST /api/items`，token 由拦截器注入），
+    成功 `message.success('发布成功')` 后跳 `/items/{res.data.id}`（用后端返回的自增 id，不在前端猜）；
+    失败用 `getErrorMessage()` 展示后端 `message`，401 则提示重新登录并跳 `/login`。
+  - 请求体里没有 `ownerId`：发布者由后端从 JWT 解析，前端传了也会被忽略。
+- `/items/:id` 的「下架物品」（软删除）：
+  - 显示条件 `canRemove = 已登录 && user.id === item.ownerId && item.status === 'AVAILABLE'`，
+    三条同时成立才渲染 `Button danger`「下架物品」（操作区 `Space` 内，手机端 `block`）；
+    这是显示层判断，归属与状态由后端 `DELETE /api/items/{id}` 独立校验。
+  - 点击先 `Modal.confirm` 二次确认，`onOk` 返回 Promise（确认框自动 loading）；
+    请求期间 `removing = true` 让按钮 loading + disabled，防止重复提交。
+  - 成功 `message.success('已下架')` 后 `navigate('/profile', { replace: true })`；
+    失败用 `getErrorMessage()` 展示后端 `message`（越权 403 / 状态锁定 400 / 不存在 404）。
+  - 关键坑：除 401 外这些业务失败都是 **HTTP 200 + 包装体 `code` 非 200**，
+    必须判断 `res.code`，不能只看 HTTP 状态码。
+  - 后端只把 `status` 改为 `REMOVED`（不删行），且 `GET /api/items` 暂不按状态过滤，
+    下架物品仍会出现在列表里（见 docs/PROGRESS.md 已知限制）。
 - `/barters/:id` 的详情与操作：
   - 数据 `GET /api/barters/{id}`，后端只允许申请双方查看；
     页面用 `utils/error.ts` 的 `getHttpStatus()` 把 404 / 403 分别映射为
@@ -179,6 +203,17 @@ if (!res || res.code !== 200) {
   throw new Error(res?.message || `接口返回异常：code=${res?.code}`)
 }
 setItems(Array.isArray(res.data) ? res.data : [])
+```
+
+写操作同理（以 `PublishItem` 为例），并且要用后端返回的数据，不在前端猜：
+
+```ts
+const res = await createItem(payload)
+
+if (!res || res.code !== 200 || !res.data) {
+  throw new Error(res?.message || `发布失败：code=${res?.code}`)
+}
+navigate(`/items/${res.data.id}`)
 ```
 
 ## 6. 状态管理

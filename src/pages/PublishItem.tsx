@@ -1,8 +1,13 @@
 import type { FC } from 'react'
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Button, Card, Form, Input, InputNumber, Radio, Select, Space, Switch, Typography, message } from 'antd'
 import { SendOutlined } from '@ant-design/icons'
 
-import type { ItemCategory, ItemCondition, ItemMode } from '@/types/item'
+import { createItem } from '@/api/item'
+import { useUserStore } from '@/store/useUserStore'
+import type { CreateItemPayload, ItemCategory, ItemCondition, ItemMode } from '@/types/item'
+import { getErrorMessage, getHttpStatus } from '@/utils/error'
 import { ITEM_CATEGORIES, ITEM_CONDITIONS, getCategoryLabel, getConditionLabel } from '@/utils/item'
 
 const { Title, Text } = Typography
@@ -17,7 +22,7 @@ interface PublishFormValues {
   mode: ItemMode
   /** SALE / BOTH 必填 */
   price?: number
-  /** BARTER / BOTH 选填 */
+  /** BARTER / BOTH 必填（至少一个） */
   wantCategories?: ItemCategory[]
   wantDescription?: string
   allowPriceDiff?: boolean
@@ -41,37 +46,132 @@ const MODE_OPTIONS: { label: string; value: ItemMode }[] = [
 
 const DEFAULT_MODE: ItemMode = 'BARTER'
 
+/** 选填文本：去掉首尾空格后为空就不传，避免把 `""` 写进库 */
+function toOptionalText(value?: string): string | undefined {
+  const trimmed = value?.trim()
+  return trimmed ? trimmed : undefined
+}
+
+/**
+ * 按交易模式清洗表单数据，得到 `POST /api/items` 的请求体。
+ *
+ * 三种模式对字段的要求不完全一样：
+ * - `BARTER`（只换）：不卖钱 → **不传 `price`**；传 `wantCategories` 等换物偏好；
+ * - `SALE`（只卖）：**不传换物偏好**（`wantCategories` / `wantDescription` / `allowPriceDiff`），
+ *   只传 `price`；
+ * - `BOTH`（都可）：价格与换物偏好都传。
+ *
+ * 为什么要「删字段」而不是传 `null` / `0`：后端按字段是否出现来判断业务含义，
+ * 例如给纯换物物品带上 `price`，列表页就会把它显示成有售价。
+ *
+ * 另一个容易踩的点：antd `Form` 默认 `preserve: true`，被条件渲染隐藏的
+ * `Form.Item` 的值**仍留在 form store 里**（用户先选 SALE 填了价格，再切回 BARTER，
+ * `onFinish` 拿到的 `values.price` 依然存在）。所以必须在这里按 `mode` 显式剔除，
+ * 不能把 `values` 原样提交。
+ */
+function buildCreatePayload(values: PublishFormValues): CreateItemPayload {
+  const payload: CreateItemPayload = {
+    title: values.title.trim(),
+    description: toOptionalText(values.description),
+    category: values.category,
+    condition: values.condition,
+    mode: values.mode,
+  }
+
+  // 价格：只有 SALE / BOTH 才带。后端对这两种模式强制要求 price > 0（前端 rules 已先拦一次）。
+  if (values.mode === 'SALE' || values.mode === 'BOTH') {
+    payload.price = values.price
+  }
+
+  // 换物偏好：只有 BARTER / BOTH 才带。SALE 模式下即使 form store 里还有残留值也不提交。
+  if (values.mode === 'BARTER' || values.mode === 'BOTH') {
+    payload.wantCategories = values.wantCategories?.length ? [...values.wantCategories] : undefined
+    payload.wantDescription = toOptionalText(values.wantDescription)
+    payload.allowPriceDiff = Boolean(values.allowPriceDiff)
+  }
+
+  return payload
+}
+
 /**
  * 发布物品页。
  *
- * 提交逻辑尚未对接后端：表单校验通过后给出提示，并把清洗后的数据打印到控制台。
+ * 提交链路：`Form` 校验通过 → `buildCreatePayload` 按 mode 清洗 → `createItem`
+ * （`POST /api/items`）→ 成功后跳 `/items/{新物品 id}`。
+ *
+ * 登录约定（与 `BarterApply` 一致）：
+ * - 进入页面先幂等调用一次 `useUserStore.getState().init()`，避免 `App.tsx` 的 effect
+ *   尚未执行时把已登录用户误判为未登录（子组件 effect 先于父组件执行）；
+ * - 未登录只做提示 + 跳 `/login`，真正是否允许发布仍由后端按 token 判定（401）。
  */
 const PublishItem: FC = () => {
+  const navigate = useNavigate()
   const [form] = Form.useForm<PublishFormValues>()
   const [messageApi, contextHolder] = message.useMessage()
+
+  const [submitting, setSubmitting] = useState<boolean>(false)
+  // 登录态检查完成前不渲染表单，避免未登录用户看到可填的表单又被打断
+  const [loginChecked, setLoginChecked] = useState<boolean>(false)
 
   // 监听模式，用于条件显示价格 / 换物诉求字段
   const mode = Form.useWatch('mode', form) ?? DEFAULT_MODE
   const needPrice = mode === 'SALE' || mode === 'BOTH'
   const needWant = mode === 'BARTER' || mode === 'BOTH'
 
-  /**
-   * 提交占位。
-   *
-   * 提交前先做一次基础清洗（去掉首尾空格），避免把脏数据传给后端；
-   * 真正的写库逻辑待接入 `POST /api/items`（见 docs/API.md 待开发接口）。
-   * 注意：前端校验只是体验优化，后端仍需独立校验全部入参（docs/SECURITY.md 1.4）。
-   */
-  const handleFinish = (values: PublishFormValues): void => {
-    const payload: PublishFormValues = {
-      ...values,
-      title: values.title.trim(),
-      description: values.description?.trim(),
-      wantDescription: values.wantDescription?.trim(),
+  // 登录守卫：刷新本页时 store 里的 user 可能还没恢复，先 init() 再判断
+  useEffect(() => {
+    useUserStore.getState().init()
+
+    if (!useUserStore.getState().user) {
+      messageApi.warning('请先登录')
+      navigate('/login', { replace: true })
+      return
     }
-    // TODO: 接入 POST /api/items（真实写库）
-    console.log('TODO: 提交发布', payload)
-    messageApi.info('发布功能开发中，暂未真正提交')
+
+    setLoginChecked(true)
+  }, [messageApi, navigate])
+
+  /**
+   * 提交发布。
+   *
+   * 前端校验只是体验优化，后端仍会独立校验全部入参（见 docs/SECURITY.md 1.4）；
+   * 失败原因（400 参数 / 401 未登录）一律用 `getErrorMessage` 展示后端 message。
+   */
+  const handleFinish = async (values: PublishFormValues): Promise<void> => {
+    // 提交时再确认一次登录态：可能在页面停留期间被 401 清掉（例如另一个标签页 token 过期）
+    if (!useUserStore.getState().user) {
+      messageApi.warning('请先登录')
+      navigate('/login', { replace: true })
+      return
+    }
+
+    setSubmitting(true)
+    try {
+      const res = await createItem(buildCreatePayload(values))
+
+      if (!res || res.code !== 200 || !res.data) {
+        throw new Error(res?.message || `发布失败：code=${res?.code}`)
+      }
+
+      messageApi.success('发布成功')
+      // 用后端返回的新 id 跳详情页，不在前端猜 id
+      navigate(`/items/${res.data.id}`)
+    } catch (error) {
+      if (getHttpStatus(error) === 401) {
+        messageApi.warning('请先登录')
+        navigate('/login', { replace: true })
+        return
+      }
+
+      messageApi.error(getErrorMessage(error, '发布失败，请稍后重试'))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  if (!loginChecked) {
+    // 仍要渲染 contextHolder，否则上面的「请先登录」提示不会显示
+    return <>{contextHolder}</>
   }
 
   return (
@@ -90,6 +190,7 @@ const PublishItem: FC = () => {
           form={form}
           layout="vertical"
           initialValues={{ mode: DEFAULT_MODE, allowPriceDiff: false }}
+          disabled={submitting}
           onFinish={handleFinish}
           style={{ maxWidth: 640 }}
         >
@@ -148,11 +249,17 @@ const PublishItem: FC = () => {
 
           {needWant && (
             <>
-              <Form.Item name="wantCategories" label="想换什么分类">
+              <Form.Item
+                name="wantCategories"
+                label="想换什么分类"
+                rules={[
+                  { required: true, type: 'array', min: 1, message: '请至少选择一个想换的分类' },
+                ]}
+              >
                 <Select
                   mode="multiple"
                   allowClear
-                  placeholder="想换的分类（选填，可多选）"
+                  placeholder="想换的分类（至少一个，可多选）"
                   options={CATEGORY_OPTIONS}
                 />
               </Form.Item>
@@ -178,7 +285,7 @@ const PublishItem: FC = () => {
 
           <Form.Item style={{ marginBottom: 0 }}>
             <Space>
-              <Button type="primary" htmlType="submit" icon={<SendOutlined />}>
+              <Button type="primary" htmlType="submit" icon={<SendOutlined />} loading={submitting}>
                 提交发布
               </Button>
               <Button onClick={() => form.resetFields()}>重置</Button>

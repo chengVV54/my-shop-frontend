@@ -2,7 +2,8 @@
 
 > 记录当前完成度与后续计划。每完成一项请更新本文档。
 
-最后更新：前端「换物详情 + 同意 / 拒绝」完成——`/barters/:id` 接入 `GET /api/barters/{id}`，接收方可 `accept` / `reject`
+最后更新：前端「下架物品（软删除）」完成——`api/item.ts` 新增 `deleteItem()`，
+`ItemDetail` 在「本人 + 在架」时展示「下架物品」按钮（`Modal.confirm` 二次确认 → `DELETE /api/items/{id}`）
 
 ## 已完成
 
@@ -19,12 +20,12 @@
   - 用 `requestIdRef` 丢弃过期响应，避免快速切换筛选时的竞态
 - [x] **物品详情**
   - `GET /api/items/{id}`，含图片、价格/换物诉求、状态标签、加购与发起换物按钮（入口占位）
-- [x] **发布物品（表单占位）**
+- [x] **发布物品（表单占位，已被下方「发布物品（真实写库）」替换）**
   - antd `Form` 完整字段：标题、分类、成色、描述、模式
   - 按模式条件显示「价格」与「想换什么」字段
   - 基础校验：必填、标题 `whitespace`（不能只有空格）、标题 ≤60、描述 ≤500、
     补充说明 ≤200、价格 >0 且 ≤9999999
-  - **提交逻辑仅为提示「功能开发中」+ `console.log('TODO: 提交发布', payload)`，尚未写库**
+  - 当时提交逻辑仅为提示「功能开发中」+ `console.log`，**现已在下方接入 `POST /api/items`**
 - [x] **前端渲染优化（响应式、美化）**
   - `index.html` 增加 viewport（`width=device-width, initial-scale=1.0`），手机端按设备宽度渲染
   - `App.tsx` 接入 `ConfigProvider`：主色 `#fa8c16`（橙色，贴合换物主题）、圆角 token、中文 locale
@@ -164,6 +165,55 @@
     真正的权限（仅接收方）与状态（仅 PENDING）由后端判定；页面不手写 `Authorization`，
     不把前端判断当权限依据，照常处理 401 / 403 / 400
 
+- [x] **发布物品（真实写库，`POST /api/items`）**
+  - 类型：`types/item.ts` 新增 `CreateItemPayload`（请求体只含物品本身，**没有 `ownerId`**，
+    发布者由后端从 JWT 解析），经 `types/index.ts` 自动导出
+  - 接口：新增 `api/item.ts`，封装 `createItem(data)`（`POST /api/items`），
+    token 仍由 `request.ts` 拦截器自动携带，成功返回新建的 `Item`（含数据库自增 `id`）
+  - 页面：`pages/PublishItem.tsx` 由「提示功能开发中」改为真实提交（路由 `/publish`，需登录）
+    - 登录守卫：进入时先幂等 `useUserStore.getState().init()`，未登录 `message.warning('请先登录')` +
+      `navigate('/login', { replace: true })`；提交前再判一次（防止页面停留期间 401 清掉登录态）
+    - 数据清洗：新增 `buildCreatePayload(values)`——`BARTER` 不带 `price`，
+      `SALE` 不带 `wantCategories` / `wantDescription` / `allowPriceDiff`，`BOTH` 两者都带；
+      `title` / `description` / `wantDescription` 先 `trim()`，空串不传（后端存 NULL 而不是 `""`）。
+      必须显式清洗：antd `Form` 默认 `preserve: true`，被条件渲染隐藏的字段值仍留在 form store，
+      切换模式后 `onFinish` 可能拿到上一次模式的残留字段
+    - 校验补强：`SALE` / `BOTH` 价格必填且 `0.01 ~ 9999999`（原有规则）；
+      `BARTER` / `BOTH` 的 `wantCategories` 改为**至少选一个**（`required + type: 'array' + min: 1`）
+    - 提交：`createItem(payload)` → 判断 `code === 200` 且 `data` 存在 →
+      `message.success('发布成功')` → `navigate('/items/' + res.data.id)`（用后端返回的 id）；
+      失败用 `getErrorMessage()` 展示后端 `message`，HTTP 401 时提示重新登录并跳 `/login`；
+      提交中 `submitting` 让表单与按钮 `loading` / `disabled`，避免重复发布
+    - 其他：登录检查完成前只渲染 `contextHolder`，避免未登录用户先看到表单
+  - 清理：删除 `PublishItem` 里的 `TODO` 与 `console.log`（遵循 [CONVENTIONS.md](./CONVENTIONS.md) 7）
+  - 验证：`npm run build` 通过；用 zhangsan 账号对真实后端跑通 `BARTER`（无 price）/
+    `SALE`（无换物偏好）/ `BOTH`（两者都有）三种请求体，响应字段符合预期，测试数据已删除
+  - 安全（守 [SECURITY.md](./SECURITY.md) 底线）：不传 `ownerId`（后端只认 JWT），
+    不手写 `Authorization`，前端校验只做体验优化，`mode` / `price` / 字段合法性最终由后端判定
+
+- [x] **下架物品（软删除，`DELETE /api/items/{id}`）**
+  - 接口：`api/item.ts` 新增 `deleteItem(id)`（`DELETE /api/items/{id}`），
+    token 仍由 `request.ts` 拦截器自动携带；成功时后端返回 `Result<Void>`，`data` 为 `null`，
+    调用方只需判断 `code === 200`
+  - 权限：`ItemDetail` 新增 `canRemove = 已登录 && user.id === item.ownerId && item.status === 'AVAILABLE'`，
+    三个条件同时满足才渲染 `Button danger`「下架物品」（`DeleteOutlined` 图标，
+    与「收藏」并排放在操作区 `Space` 内，`wrap` 保证不被遮挡；手机端 `block` 撑满一行）
+  - 二次确认：点击后 `Modal.confirm`，标题「下架物品」、正文
+    「确定要下架该物品吗？下架后将无法被其他人看到。」、`okText` 确认下架 / `cancelText` 再想想、
+    `okButtonProps.danger`；`onOk` 返回 Promise，确认框自动 loading 直到请求结束
+  - 提交：`removing` 状态让按钮 `loading` + `disabled`，防止重复提交；`deleteItem(item.id)` 后
+    **判断 `res.code === 200`**（关键：越权 403 / 状态锁定 400 / 不存在 404 都是
+    HTTP 200 + 业务 code，只看 HTTP 状态会把失败当成功）
+  - 成功：`message.success('已下架')` + `navigate('/profile', { replace: true })`
+    （`replace` 不保留已失效的详情页历史，返回时不会又回到「已下架」的物品）
+  - 失败：`getErrorMessage(error, '下架失败，请稍后重试')` 优先展示后端 `message`
+    （「只能删除自己的物品」/「物品已被锁定或完成，无法删除」/「物品不存在」），
+    不自行编造原因；若 401 已清掉登录态，提示「登录已失效，请重新登录」并跳 `/login`
+  - 验证：`npm run build` 通过（tsc 无类型错误）
+  - 安全（守 [SECURITY.md](./SECURITY.md) 底线）：前端三个条件只用于显示 / 隐藏入口，
+    归属（只认 JWT 解析出的 userId）与状态（只允许 `AVAILABLE`）由后端独立校验；
+    页面不手写 `Authorization`，照常处理 401 / 403 / 400 / 404
+
 ## 进行中
 
 - [ ] 无（当前迭代已收尾，下一步从「待做」取）
@@ -173,8 +223,15 @@
 - [ ] **用户系统后续**
   - 需要登录的页面/操作统一守卫与登录后回跳（当前只在导航栏控制入口显示）
   - 首屏可用 localStorage 缓存渲染，需要权威用户信息时调用 `GET /api/auth/me`（`getCurrentUser()` 已封装）
-- [ ] **发布物品（真实写库）**
-  - `PublishItem` 接入 `POST /api/items`，含图片上传、表单校验、提交后跳转
+- [ ] **发布物品后续**
+  - 图片上传（当前 `CreateItemRequest` 没有 `images` 字段，发布出来的物品 `images` 为空数组）
+  - `PublishItem` 已接入真实写库，图片需等后端请求体支持后再补
+- [ ] **下架 / 我的物品后续**
+  - [x] 详情页下架（本人 + 在架才显示，`DELETE /api/items/{id}`，后端软删除为 `REMOVED`）
+  - [ ] `/profile` 的「我的物品」列表（后端暂无「我的物品」接口，`GET /api/items` 也不支持 `ownerId`）
+  - [ ] 重新上架（后端暂无接口，`REMOVED` 目前不可逆）
+  - [ ] 列表接口过滤 `REMOVED`（当前 `GET /api/items` 不按状态过滤，下架物品仍会出现在列表里，
+        `ItemList` / 换物页 / 二手页都是全量拉取后展示，需要后端加上状态过滤或前端补过滤）
 - [ ] **换物流程**
   - [x] 发起换物申请（前端，`/barter/apply/:itemId` → `POST /api/barters`）
   - [x] 我的换物列表（`/barters`，`GET /api/barters?type=all|from|to`）
@@ -197,8 +254,10 @@
 
 ## 已知限制
 
-- `PublishItem` 提交不生效：校验通过后提示「发布功能开发中」并打印清洗后的数据
-  （待接入 `POST /api/items`）。
+- 发布物品暂不支持图片上传：`POST /api/items` 的请求体（后端 `CreateItemRequest`）没有 `images` 字段，
+  新发布物品的 `images` 恒为空数组，详情页走图片占位；等后端支持后再补上传与提交。
+- `PublishItem` 对 `BARTER` / `BOTH` 的 `wantCategories` **强制至少选一个**（比后端严格：
+  后端该字段选填），如果产品上允许「随便换」，把这条 `Form.Item` 的 `required` 规则去掉即可。
 - `Layout` 的搜索框（空输入忽略，接口未接入）、页脚链接仍为占位；导航消息图标的未读数写死为 `0`。
   登录态与用户下拉菜单已接入 `useUserStore`，不再是模拟状态。
 - 列表页 / 换物页 / 二手页都是「一次拉全量 + 前端过滤 + 前端分页」，物品量大时会有性能与
@@ -213,6 +272,12 @@
 - 换物详情页暂未做「取消申请」「确认完成」按钮，状态流转只覆盖接收方的同意 / 拒绝；
   「联系对方」仍是占位提示（消息功能未开发）。
 - 详情页「收藏」按钮只提示开发中，未落库；卖家信用分字段后端暂无，界面显示 `--`。
+- 下架是**软删除且不可逆**：`DELETE /api/items/{id}` 只把 `status` 改成 `REMOVED`，后端没有
+  「重新上架」接口。下架后 `GET /api/items/{id}` 仍能打开详情（状态标签显示「已下架」，
+  「下架物品」按钮消失），但 `GET /api/items` **不按状态过滤**，该物品仍会出现在列表 / 换物 / 二手页，
+  与确认框文案「下架后将无法被其他人看到」不完全一致——需要后端补状态过滤（或前端在列表侧过滤）。
+- 下架成功后跳 `/profile`，但「我的物品」卡片仍是空态（无接口），用户暂时无法在个人中心看到
+  自己已下架 / 在架的物品，后续随「我的物品」接口一起补。
 - 发起换物：`BarterApply` 的「我的物品」是 `GET /api/items` 全量拉取后前端过滤
   （后端 `GET /api/items` 不支持 `ownerId`），物品多时会浪费流量，后续应改为服务端筛选；
   页面只在**进入时**校验登录态，申请提交过程中若 token 失效应以后端 401 为准（拦截器会清登录态）。
@@ -220,7 +285,7 @@
   才能看到刚提交的申请（也可从导航用户下拉的「我的换物」进入）。
 - `useCartStore` 只有本地状态，未持久化、未与后端同步；购物车页面尚未开发（点击仅提示占位）。
 - 用户系统：登录态只用于显示/隐藏入口，**没有**统一路由守卫——未登录也能打开 `/profile` 等页面
-  （`/barter/apply/:itemId`、`/barters`、`/barters/:id` 是在页面内自带登录前置判断的三个路由）；
+  （`/barter/apply/:itemId`、`/barters`、`/barters/:id`、`/publish` 是在页面内自带登录前置判断的四个路由）；
   登录后固定跳首页，不支持回跳登录前的地址；
   首屏用 localStorage 里的 `user` 缓存渲染，尚未调用 `GET /api/auth/me` 做权威刷新。
 - 401 已在 `request.ts` 统一处理（清除本地登录态），但**不自动跳转**，也尚未统一各页面的

@@ -8,6 +8,7 @@ import {
   Col,
   Descriptions,
   Grid,
+  Modal,
   Result,
   Row,
   Space,
@@ -24,6 +25,7 @@ import {
   CameraOutlined,
   CheckCircleOutlined,
   CustomerServiceOutlined,
+  DeleteOutlined,
   DesktopOutlined,
   MobileOutlined,
   PictureOutlined,
@@ -34,9 +36,11 @@ import {
   UserOutlined,
 } from '@ant-design/icons'
 
+import { deleteItem } from '@/api/item'
 import request from '@/api/request'
 import { useUserStore } from '@/store/useUserStore'
 import type { ApiResult, Item, ItemCategory } from '@/types'
+import { getErrorMessage } from '@/utils/error'
 import {
   formatPrice,
   getCategoryLabel,
@@ -117,6 +121,8 @@ const ItemDetail: FC = () => {
 
   const [item, setItem] = useState<Item | null>(null)
   const [loading, setLoading] = useState<boolean>(true)
+  /** 下架请求进行中：给「下架物品」按钮加 loading 并禁用，防止重复提交 */
+  const [removing, setRemoving] = useState<boolean>(false)
   const [errorText, setErrorText] = useState<string>('')
   const [messageApi, contextHolder] = message.useMessage()
 
@@ -185,6 +191,73 @@ const ItemDetail: FC = () => {
     ? item.wantDescription.trim()
     : wantCategoryLabels.join('、')
   const actions = buildActions(item.mode)
+
+  /**
+   * 是否显示「下架物品」按钮。
+   *
+   * 三个条件缺一不可：**已登录** + **是自己的物品**（`user.id === item.ownerId`）
+   * + **状态为在架**（`AVAILABLE`）。锁定 / 完成 / 已下架的物品不允许再下架，
+   * 否则会破坏进行中的交易。
+   *
+   * 注意：这只是**显示层**判断（见 docs/SECURITY.md 1.3），用来少给用户无效入口；
+   * 真正的归属与状态校验在后端 `DELETE /api/items/{id}`，前端照常处理被拒绝的返回。
+   */
+  const canRemove = Boolean(user && user.id === item.ownerId && item.status === 'AVAILABLE')
+
+  /**
+   * 下架物品（软删除）。
+   *
+   * 流程：`Modal.confirm` 二次确认 → 确认后 `onOk` 发 `DELETE /api/items/{id}`
+   * → 成功提示「已下架」并回个人中心；失败按后端 `message` 提示。
+   *
+   * `onOk` 返回 Promise 时，antd 会让确认框保持 loading 直到请求结束，
+   * 用户不会「点完没反应」而重复点击。
+   */
+  const handleRemove = (): void => {
+    // 幂等保护：请求进行中不再弹出第二个确认框（按钮此时也已 loading / disabled，双保险）
+    if (removing) {
+      return
+    }
+
+    Modal.confirm({
+      title: '下架物品',
+      content: '确定要下架该物品吗？下架后将无法被其他人看到。',
+      okText: '确认下架',
+      cancelText: '再想想',
+      // 危险操作：确认按钮用红色，降低误触
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        setRemoving(true)
+
+        try {
+          const res = await deleteItem(item.id)
+
+          // 除 401 外的业务失败（403 越权 / 400 状态锁定 / 404 不存在）也是 HTTP 200，
+          // 必须判断包装体的 code，否则会把失败当成功
+          if (!res || res.code !== 200) {
+            throw new Error(res?.message || `下架失败：code=${res?.code}`)
+          }
+
+          messageApi.success('已下架')
+
+          // replace：不保留这条已失效的详情页，返回时不会又回到「已下架」的物品
+          navigate('/profile', { replace: true })
+        } catch (error) {
+          // 401 时 request.ts 已清除登录态：引导重新登录，而不是展示业务错误
+          if (!useUserStore.getState().user) {
+            messageApi.warning('登录已失效，请重新登录')
+            navigate('/login', { replace: true })
+            return
+          }
+
+          // 403 / 400 / 404 一律优先展示后端 message（如「只能删除自己的物品」），不自己编造原因
+          messageApi.error(getErrorMessage(error, '下架失败，请稍后重试'))
+        } finally {
+          setRemoving(false)
+        }
+      },
+    })
+  }
 
   /**
    * 底部操作按钮的点击行为。
@@ -336,6 +409,19 @@ const ItemDetail: FC = () => {
                 >
                   收藏
                 </Button>
+                {/* 只有「本人 + 在架」才出现：Space 自带 wrap，按钮与其它操作并排且不会被遮挡 */}
+                {canRemove && (
+                  <Button
+                    danger
+                    icon={<DeleteOutlined />}
+                    block={isMobile}
+                    loading={removing}
+                    disabled={removing}
+                    onClick={handleRemove}
+                  >
+                    下架物品
+                  </Button>
+                )}
                 {actions.length === 0 && (
                   <Text type="secondary">
                     <CheckCircleOutlined /> 该物品暂不支持线上操作
